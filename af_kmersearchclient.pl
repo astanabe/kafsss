@@ -10,6 +10,7 @@ use POSIX qw(strftime WNOHANG);
 use Sys::Hostname;
 use File::Basename;
 use URI;
+use File::Temp qw(tempfile);
 
 # Version number
 my $VERSION = "1.0.0";
@@ -115,7 +116,7 @@ our @global_input_files = ();
 # Check required arguments (skip for resume/jobs/cancel mode)
 unless ($resume_job_id || $cancel_job_id || $show_jobs) {
     if (@ARGV < 2) {
-        die "Usage: perl af_kmersearchclient.pl [options] input_file(s) output_file\n" .
+        die "Usage: af_kmersearchclient [options] input_file(s) output_file\n" .
             "Use --help for detailed usage information.\n";
     }
     
@@ -168,7 +169,7 @@ if ($netrc_file) {
     %netrc_credentials = parse_netrc_file($netrc_file);
 }
 
-print "af_kmersearchclient.pl version $VERSION\n";
+print "af_kmersearchclient version $VERSION\n";
 print "Input files (" . scalar(@global_input_files) . "):\n";
 for my $i (0..$#global_input_files) {
     print "  " . ($i + 1) . ". $global_input_files[$i]\n";
@@ -228,46 +229,252 @@ my $current_server_index = 0;
 my %failed_servers = ();  # server_url => failure_time
 my $total_retry_count = 0;
 
-# Submit async job and start polling
-my $job_id = submit_search_job(@global_input_files);
-print "Job submitted with ID: $job_id\n";
-
-# Save job information
-save_job_info({
-    job_id => $job_id,
-    output_file => $global_output_file,
-    input_files => \@global_input_files,
-    server_urls => \@server_urls,
-    database => $database,
-    partition => $partition,
-    maxnseq => $maxnseq,
-    minscore => $minscore,
-    minpsharedkey => $minpsharedkey,
-    mode => $mode,
-    created_time => time(),
-    status => 'running'
-});
-
-# Poll for results
-my $result = poll_for_results($job_id);
-
-if ($result->{success}) {
-    print "Job completed successfully.\n";
-    print "Total results: " . $result->{total_results} . "\n";
-    
-    # Clean up job info
-    remove_job_info($job_id);
-} else {
-    print STDERR "Job failed or was interrupted.\n";
-    print STDERR "Job ID: $job_id (saved for resume)\n";
-    exit 1;
+# Open output file if specified
+if ($global_output_file) {
+    open STDOUT, '>', $global_output_file or die "Cannot open output file '$global_output_file': $!\n";
 }
+
+# Process sequences with parallel streaming
+print STDERR "Starting parallel processing with $numthreads threads...\n";
+my $result = process_sequences_parallel_streaming(@global_input_files);
+
+print STDERR "Processing completed successfully.\n";
+print STDERR "Total results: " . $result->{results} . "\n";
+print STDERR "Total queries: " . $result->{queries} . "\n";
 
 exit 0;
 
 #
 # Async Job Management Functions
 #
+
+sub process_sequences_parallel_streaming {
+    my (@input_files) = @_;
+    
+    my %active_children = ();  # pid => {query_number, temp_file}
+    my %completed_results = (); # query_number => {file, count}
+    my $query_count = 0;
+    my $next_output_query = 1;
+    my $total_results = 0;
+    my $current_file_index = 0;
+    my $current_fh = undef;
+    
+    # Open first input file
+    if (@input_files > 0) {
+        $current_fh = open_input_file($input_files[$current_file_index]);
+    }
+    
+    while (1) {
+        # Read next FASTA entry if we have available slots
+        my $fasta_entry = undef;
+        if (scalar(keys %active_children) < $numthreads) {
+            # Try to read from current file
+            while (!$fasta_entry && $current_fh) {
+                $fasta_entry = read_next_fasta_entry($current_fh);
+                
+                # If no more entries in current file, move to next file
+                if (!$fasta_entry) {
+                    close_input_file($current_fh, $input_files[$current_file_index]);
+                    $current_file_index++;
+                    
+                    if ($current_file_index < @input_files) {
+                        $current_fh = open_input_file($input_files[$current_file_index]);
+                    } else {
+                        $current_fh = undef;
+                        last;
+                    }
+                }
+            }
+        }
+        
+        # Fork new process if we have a sequence and available slots
+        if ($fasta_entry && scalar(keys %active_children) < $numthreads) {
+            $query_count++;
+            my $global_query_number = $query_count;
+            my ($temp_fh, $temp_file) = tempfile("af_kmersearchclient_$$" . "_$global_query_number" . "_XXXXXX", UNLINK => 0);
+            close($temp_fh);
+            
+            my $pid = fork();
+            
+            if (!defined $pid) {
+                die "Cannot fork: $!\n";
+            } elsif ($pid == 0) {
+                # Child process
+                process_single_sequence_client($fasta_entry, $global_query_number, $temp_file);
+                exit 0;
+            } else {
+                # Parent process
+                $active_children{$pid} = {
+                    query_number => $global_query_number,
+                    temp_file => $temp_file
+                };
+                print "Started query $query_count: " . $fasta_entry->{label} . "\n";
+            }
+        }
+        
+        # Check for completed children (non-blocking)
+        my $pid = waitpid(-1, WNOHANG);
+        if ($pid > 0 && exists $active_children{$pid}) {
+            my $child_info = delete $active_children{$pid};
+            my $query_number = $child_info->{query_number};
+            my $temp_file = $child_info->{temp_file};
+            
+            if ($? != 0) {
+                die "Child process $pid (query $query_number) failed with exit code " . ($? >> 8) . "\n";
+            }
+            
+            # Count results and store temp file info for memory-efficient processing
+            my $result_count = 0;
+            if (-f $temp_file) {
+                open my $temp_fh, '<', $temp_file or die "Cannot open temporary file '$temp_file': $!\n";
+                while (<$temp_fh>) {
+                    $result_count++;
+                }
+                close $temp_fh;
+                
+                # Store temp file path and count instead of loading all data into memory
+                $completed_results{$query_number} = {
+                    file => $temp_file,
+                    count => $result_count
+                };
+            } else {
+                $completed_results{$query_number} = {
+                    file => undef,
+                    count => 0
+                };
+            }
+            
+            if ($result_count > 0) {
+                print "Completed query $query_number ($result_count results)\n";
+            } else {
+                print "Completed query $query_number (0 results)\n";
+            }
+        }
+        
+        # Output completed results in order
+        while (exists $completed_results{$next_output_query}) {
+            my $result_info = delete $completed_results{$next_output_query};
+            
+            if ($result_info->{file} && -f $result_info->{file}) {
+                # Stream results directly from temp file to output file (memory efficient)
+                open my $temp_fh, '<', $result_info->{file} or die "Cannot open temporary file '$result_info->{file}': $!\n";
+                while (my $line = <$temp_fh>) {
+                    chomp $line;
+                    print "$line\n";
+                    $total_results++;
+                }
+                close $temp_fh;
+                unlink $result_info->{file};
+            }
+            $next_output_query++;
+        }
+        
+        # Exit condition: no more input and no active children
+        if (!$fasta_entry && scalar(keys %active_children) == 0) {
+            last;
+        }
+        
+        # If we have active children but no available slots, wait for at least one to complete
+        if (scalar(keys %active_children) >= $numthreads) {
+            my $pid = waitpid(-1, 0);  # Blocking wait
+            if ($pid > 0 && exists $active_children{$pid}) {
+                my $child_info = delete $active_children{$pid};
+                my $query_number = $child_info->{query_number};
+                my $temp_file = $child_info->{temp_file};
+                
+                if ($? != 0) {
+                    die "Child process $pid (query $query_number) failed with exit code " . ($? >> 8) . "\n";
+                }
+                
+                # Count results and store temp file info for memory-efficient processing
+                my $result_count = 0;
+                if (-f $temp_file) {
+                    open my $temp_fh, '<', $temp_file or die "Cannot open temporary file '$temp_file': $!\n";
+                    while (<$temp_fh>) {
+                        $result_count++;
+                    }
+                    close $temp_fh;
+                    
+                    # Store temp file path and count instead of loading all data into memory
+                    $completed_results{$query_number} = {
+                        file => $temp_file,
+                        count => $result_count
+                    };
+                } else {
+                    $completed_results{$query_number} = {
+                        file => undef,
+                        count => 0
+                    };
+                }
+                
+                if ($result_count > 0) {
+                    print "Completed query $query_number ($result_count results)\n";
+                } else {
+                    print "Completed query $query_number (0 results)\n";
+                }
+            }
+        }
+    }
+    
+    # Final processing of any remaining completed results
+    while (exists $completed_results{$next_output_query}) {
+        my $result_info = delete $completed_results{$next_output_query};
+        
+        if ($result_info->{file} && -f $result_info->{file}) {
+            # Stream results directly from temp file to output file (memory efficient)
+            open my $temp_fh, '<', $result_info->{file} or die "Cannot open temporary file '$result_info->{file}': $!\n";
+            while (my $line = <$temp_fh>) {
+                chomp $line;
+                print "$line\n";
+                $total_results++;
+            }
+            close $temp_fh;
+            unlink $result_info->{file};
+        }
+        $next_output_query++;
+    }
+    
+    return { results => $total_results, queries => $query_count };
+}
+
+sub process_single_sequence_client {
+    my ($fasta_entry, $query_number, $temp_file) = @_;
+    
+    # Create job data for single sequence
+    my $job_data = {
+        sequences => [{
+            sequence_number => $query_number,
+            label => $fasta_entry->{label},
+            sequence => $fasta_entry->{sequence}
+        }],
+        database => $database,
+        partition => $partition,
+        maxnseq => $maxnseq,
+        mode => $mode
+    };
+    
+    # Add minscore if specified
+    $job_data->{minscore} = $minscore if defined $minscore;
+    
+    # Add minpsharedkey
+    $job_data->{minpsharedkey} = $minpsharedkey;
+    
+    # Submit job to server
+    my $server_url = get_next_server_url();
+    my $job_id = make_job_submission_request($server_url, $job_data);
+    
+    # Poll for results
+    my $results = poll_for_results($job_id, $server_url);
+    
+    # Write results to temp file
+    open my $temp_fh, '>', $temp_file or die "Cannot open temporary file '$temp_file' for writing: $!\n";
+    if ($results && @$results) {
+        for my $result (@$results) {
+            print $temp_fh "$result\n";
+        }
+    }
+    close $temp_fh;
+}
 
 sub submit_search_job {
     my (@input_files) = @_;
@@ -319,7 +526,7 @@ sub make_job_submission_request {
     
     my $ua = LWP::UserAgent->new(
         timeout => 30,
-        agent => "af_kmersearchclient.pl/$VERSION"
+        agent => "af_kmersearchclient/$VERSION"
     );
     
     # Convert server URL to submission endpoint
@@ -425,7 +632,7 @@ sub get_job_status {
     
     my $ua = LWP::UserAgent->new(
         timeout => 30,
-        agent => "af_kmersearchclient.pl/$VERSION"
+        agent => "af_kmersearchclient/$VERSION"
     );
     
     my $server_url = get_next_server_url();
@@ -453,7 +660,7 @@ sub get_job_results {
     
     my $ua = LWP::UserAgent->new(
         timeout => 60,  # Longer timeout for results
-        agent => "af_kmersearchclient.pl/$VERSION"
+        agent => "af_kmersearchclient/$VERSION"
     );
     
     my $server_url = get_next_server_url();
@@ -495,7 +702,7 @@ sub validate_server_metadata {
     for my $server_url (@server_urls) {
         my $ua = LWP::UserAgent->new(
             timeout => 10,
-            agent => "af_kmersearchclient.pl/$VERSION"
+            agent => "af_kmersearchclient/$VERSION"
         );
         
         # Try to get server metadata
@@ -725,12 +932,12 @@ sub send_cancel_request {
 
 sub print_help {
     print <<EOF;
-af_kmersearchclient.pl version $VERSION
+af_kmersearchclient version $VERSION
 
-Usage: perl af_kmersearchclient.pl [options] input_file(s) output_file
-       perl af_kmersearchclient.pl --resume=JOB_ID
-       perl af_kmersearchclient.pl --cancel=JOB_ID
-       perl af_kmersearchclient.pl --jobs
+Usage: af_kmersearchclient [options] input_file(s) output_file
+       af_kmersearchclient --resume=JOB_ID
+       af_kmersearchclient --cancel=JOB_ID
+       af_kmersearchclient --jobs
 
 Search DNA sequences from multiple sources against remote af_kmersearch server using k-mer similarity.
 This client now supports asynchronous job processing with automatic polling and resume functionality.
@@ -834,22 +1041,22 @@ Authentication:
 
 Examples:
   # Submit new job
-  perl af_kmersearchclient.pl --server=localhost --db=mydb query.fasta results.tsv
+  af_kmersearchclient --server=localhost --db=mydb query.fasta results.tsv
   
   # Resume interrupted job
-  perl af_kmersearchclient.pl --resume=20250703T143052-abc123def456
+  af_kmersearchclient --resume=20250703T143052-abc123def456
   
   # Cancel running job
-  perl af_kmersearchclient.pl --cancel=20250703T143052-abc123def456
+  af_kmersearchclient --cancel=20250703T143052-abc123def456
   
   # List active jobs
-  perl af_kmersearchclient.pl --jobs
+  af_kmersearchclient --jobs
   
   # Multiple files with authentication
-  perl af_kmersearchclient.pl --server=https://server.com --netrc-file=.netrc file1.fasta file2.fasta results.tsv
+  af_kmersearchclient --server=https://server.com --netrc-file=.netrc file1.fasta file2.fasta results.tsv
   
   # Server with default database
-  perl af_kmersearchclient.pl --server=localhost:8080 'queries/*.fasta' results.tsv
+  af_kmersearchclient --server=localhost:8080 'queries/*.fasta' results.tsv
 
 EOF
 }
@@ -1133,7 +1340,7 @@ sub normalize_mode {
     my $normalized = $mode_aliases{lc($mode)};
     return '' unless $normalized;
     
-    # All modes are accepted for af_kmersearch.pl
+    # All modes are accepted for af_kmersearch
     return $normalized;
 }
 

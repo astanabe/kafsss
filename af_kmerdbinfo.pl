@@ -39,13 +39,13 @@ if ($help) {
 
 # Check required arguments
 if (@ARGV != 1) {
-    die "Usage: perl af_kmerdbinfo.pl [options] database_name\n" .
+    die "Usage: af_kmerdbinfo [options] database_name\n" .
         "Use --help for detailed usage information.\n";
 }
 
 my ($database_name) = @ARGV;
 
-print STDERR "af_kmerdbinfo.pl version $VERSION\n";
+print STDERR "af_kmerdbinfo version $VERSION\n";
 print STDERR "Database: $database_name\n";
 print STDERR "Host: $host\n";
 print STDERR "Port: $port\n";
@@ -168,9 +168,9 @@ exit 0;
 
 sub print_help {
     print <<EOF;
-af_kmerdbinfo.pl version $VERSION
+af_kmerdbinfo version $VERSION
 
-Usage: perl af_kmerdbinfo.pl [options] database_name
+Usage: af_kmerdbinfo [options] database_name
 
 Display metadata information from af_kmersearch database.
 
@@ -197,9 +197,9 @@ Output:
   - Partition information with sequence and character counts
 
 Examples:
-  perl af_kmerdbinfo.pl mydb
-  perl af_kmerdbinfo.pl --host=remote-server mydb
-  perl af_kmerdbinfo.pl --host=localhost --port=5433 --username=postgres mydb
+  af_kmerdbinfo mydb
+  af_kmerdbinfo --host=remote-server mydb
+  af_kmerdbinfo --host=localhost --port=5433 --username=postgres mydb
 
 EOF
 }

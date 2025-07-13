@@ -58,7 +58,7 @@ if ($help) {
 
 # Check required arguments
 if (@ARGV != 1) {
-    die "Usage: perl af_kmerindex.pl [options] database_name\n" .
+    die "Usage: af_kmerindex [options] database_name\n" .
         "Use --help for detailed usage information.\n";
 }
 
@@ -75,7 +75,7 @@ die "max_appearance_nrow must be non-negative\n" unless $max_appearance_nrow >= 
 die "occur_bitlen must be between 0 and 16\n" unless $occur_bitlen >= 0 && $occur_bitlen <= 16;
 die "numthreads must be non-negative\n" unless $numthreads >= 0;
 
-print "af_kmerindex.pl version $VERSION\n";
+print "af_kmerindex version $VERSION\n";
 print "Database: $database_name\n";
 print "Host: $host\n";
 print "Port: $port\n";
@@ -145,9 +145,9 @@ exit 0;
 
 sub print_help {
     print <<EOF;
-af_kmerindex.pl version $VERSION
+af_kmerindex version $VERSION
 
-Usage: perl af_kmerindex.pl [options] database_name
+Usage: af_kmerindex [options] database_name
 
 Create or drop GIN indexes on af_kmersearch table.
 
@@ -177,14 +177,14 @@ Environment variables:
   PGPASSWORD       PostgreSQL password
 
 Examples:
-  perl af_kmerindex.pl --mode=create mydb
-  perl af_kmerindex.pl --mode=drop mydb
-  perl af_kmerindex.pl --mode=create --tablespace=fast_ssd mydb
-  perl af_kmerindex.pl --mode=create --kmer_size=16 mydb
-  perl af_kmerindex.pl --mode=create --workingmemory=64GB mydb
-  perl af_kmerindex.pl --mode=create --kmer_size=32 --workingmemory=128GB --tablespace=fast_ssd mydb
-  perl af_kmerindex.pl --mode=create --max_appearance_rate=0.3 --max_appearance_nrow=500 mydb
-  perl af_kmerindex.pl --mode=create --occur_bitlen=12 --numthreads=8 mydb
+  af_kmerindex --mode=create mydb
+  af_kmerindex --mode=drop mydb
+  af_kmerindex --mode=create --tablespace=fast_ssd mydb
+  af_kmerindex --mode=create --kmer_size=16 mydb
+  af_kmerindex --mode=create --workingmemory=64GB mydb
+  af_kmerindex --mode=create --kmer_size=32 --workingmemory=128GB --tablespace=fast_ssd mydb
+  af_kmerindex --mode=create --max_appearance_rate=0.3 --max_appearance_nrow=500 mydb
+  af_kmerindex --mode=create --occur_bitlen=12 --numthreads=8 mydb
 
 EOF
 }

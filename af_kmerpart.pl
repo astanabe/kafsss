@@ -44,7 +44,7 @@ if ($help) {
 
 # Check required arguments
 if (@ARGV != 2) {
-    die "Usage: perl af_kmerpart.pl [options] input_file database_name\n" .
+    die "Usage: af_kmerpart [options] input_file database_name\n" .
         "Use --help for detailed usage information.\n";
 }
 
@@ -71,7 +71,7 @@ for my $partition_spec (@partitions) {
 my %seen = ();
 @all_partitions = grep { !$seen{$_}++ } @all_partitions;
 
-print "af_kmerpart.pl version $VERSION\n";
+print "af_kmerpart version $VERSION\n";
 print "Input file: $input_file\n";
 print "Database: $database_name\n";
 print "Host: $host\n";
@@ -139,9 +139,9 @@ exit 0;
 
 sub print_help {
     print <<EOF;
-af_kmerpart.pl version $VERSION
+af_kmerpart version $VERSION
 
-Usage: perl af_kmerpart.pl [options] input_file database_name
+Usage: af_kmerpart [options] input_file database_name
 
 Update partition information in af_kmersearch database for specified accession numbers.
 
@@ -166,11 +166,11 @@ Environment variables:
   PGPASSWORD       PostgreSQL password
 
 Examples:
-  perl af_kmerpart.pl --partition=bacteria accessions.txt mydb
-  perl af_kmerpart.pl --partition=bacteria,archaea accessions.txt mydb
-  perl af_kmerpart.pl --partition=bacteria --partition=archaea accessions.txt mydb
-  perl af_kmerpart.pl --numthreads=4 --partition=viruses accessions.txt mydb
-  echo -e "AB123456\nCD789012" | perl af_kmerpart.pl --partition=bacteria stdin mydb
+  af_kmerpart --partition=bacteria accessions.txt mydb
+  af_kmerpart --partition=bacteria,archaea accessions.txt mydb
+  af_kmerpart --partition=bacteria --partition=archaea accessions.txt mydb
+  af_kmerpart --numthreads=4 --partition=viruses accessions.txt mydb
+  echo -e "AB123456\nCD789012" | af_kmerpart --partition=bacteria stdin mydb
 
 EOF
 }
@@ -265,7 +265,7 @@ SQL
     die "Table 'af_kmersearch_meta' does not exist in database '$database_name'\n" 
         unless $meta_table_count > 0;
     
-    # Check if new columns exist (added by updated af_kmerstore.pl)
+    # Check if new columns exist (added by updated af_kmerstore)
     $sth = $dbh->prepare(<<SQL);
 SELECT column_name
 FROM information_schema.columns 
@@ -286,7 +286,7 @@ SQL
         print "Database appears to be updated for new pg_kmersearch specification.\n";
     } else {
         print "Warning: New meta columns not found. Database may be from older version.\n";
-        print "Consider updating with latest af_kmerstore.pl\n";
+        print "Consider updating with latest af_kmerstore\n";
     }
     
     print "Meta table compatibility check completed.\n";

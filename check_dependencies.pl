@@ -27,9 +27,9 @@ my @core_modules = (
 );
 
 my @network_modules = (
-    ['LWP::UserAgent', 'HTTP client (for af_kmersearchclient.pl)'],
-    ['HTTP::Request::Common', 'HTTP request generation (for af_kmersearchclient.pl)'],
-    ['URI', 'URI parsing and encoding (for af_kmersearchclient.pl)'],
+    ['LWP::UserAgent', 'HTTP client (for af_kmersearchclient)'],
+    ['HTTP::Request::Common', 'HTTP request generation (for af_kmersearchclient)'],
+    ['URI', 'URI parsing and encoding (for af_kmersearchclient)'],
 );
 
 my @server_modules = (
@@ -83,12 +83,12 @@ for my $module_info (@core_modules) {
 print "\n";
 
 # ネットワークモジュールの確認
-print "Network client modules (for af_kmersearchclient.pl):\n";
+print "Network client modules (for af_kmersearchclient):\n";
 print "-" x 50 . "\n";
 for my $module_info (@network_modules) {
     my ($module, $description) = @$module_info;
     unless (check_module($module, $description)) {
-        print "  Note: This module is only required for af_kmersearchclient.pl\n";
+        print "  Note: This module is only required for af_kmersearchclient\n";
     }
 }
 

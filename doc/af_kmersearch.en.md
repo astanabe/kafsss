@@ -1,10 +1,10 @@
-# AF KmerSearch Tools
+# af_kmersearch suite
 
 A comprehensive toolkit for storing, managing, and searching DNA sequences using PostgreSQL with the pg_kmersearch extension.
 
 ## Overview
 
-AF KmerSearch Tools provide a complete solution for DNA sequence analysis using k-mer similarity search. The toolkit consists of 6 Perl scripts that handle different aspects of DNA sequence management and search operations.
+The af_kmersearch suite provides a complete solution for DNA sequence analysis using k-mer similarity search. The toolkit consists of 10 Perl scripts that handle different aspects of DNA sequence management, search operations, and server deployment with asynchronous job processing.
 
 ## Prerequisites
 
@@ -26,7 +26,7 @@ Core modules required for all tools:
 - `Time::HiRes` - High-resolution time functions (for servers)
 - `Fcntl` - File control operations (for servers)
 
-Network client modules (af_kmersearchclient.pl):
+Network client modules (af_kmersearchclient):
 - `LWP::UserAgent` - HTTP client
 - `HTTP::Request::Common` - HTTP request generation
 - `URI` - URI parsing and encoding
@@ -147,15 +147,16 @@ perl -MStarman -e 'print "Starman available\n"'
 
 | Script | Purpose |
 |--------|---------|
-| `af_kmerstore.pl` | Store FASTA sequences into PostgreSQL database |
-| `af_kmerpart.pl` | Update partition information for sequences |
-| `af_kmerindex.pl` | Create/drop GIN indexes on sequence data |
-| `af_kmersearch.pl` | Search sequences using k-mer similarity |
-| `af_kmerdbinfo.pl` | Display database metadata information |
-| `af_kmersearchclient.pl` | Remote k-mer search client with load balancing |
-| `af_kmersearchserver.pl` | REST API server for k-mer search (standalone) |
+| `af_kmerstore` | Store FASTA sequences into PostgreSQL database |
+| `af_kmerpart` | Update partition information for sequences |
+| `af_kmerindex` | Create/drop GIN indexes on sequence data |
+| `af_kmersearch` | Search sequences using k-mer similarity |
+| `af_kmerdbinfo` | Display database metadata information |
+| `af_kmersearchclient` | Remote k-mer search client with load balancing |
+| `af_kmersearchserver.pl` | REST API server for k-mer search (standalone) with asynchronous job processing |
 | `af_kmersearchserver.fcgi` | FastCGI version for production web servers |
 | `af_kmersearchserver.psgi` | PSGI version for modern web deployment |
+| `calcsegment` | Mathematical utility for sequence segmentation parameter calculation |
 
 ## Installation
 
@@ -177,13 +178,13 @@ Password is read from the `PGPASSWORD` environment variable.
 
 ## Script Documentation
 
-### af_kmerstore.pl
+### af_kmerstore
 
 Store multi-FASTA DNA sequences into PostgreSQL database.
 
 #### Usage
 ```bash
-perl af_kmerstore.pl [options] input_file output_database
+af_kmerstore [options] input_file output_database
 ```
 
 #### Options
@@ -202,25 +203,25 @@ perl af_kmerstore.pl [options] input_file output_database
 #### Examples
 ```bash
 # Basic usage
-perl af_kmerstore.pl sequences.fasta mydb
+af_kmerstore sequences.fasta mydb
 
 # With partitions and parallel processing
-perl af_kmerstore.pl --partition=bacteria --numthreads=4 sequences.fasta mydb
+af_kmerstore --partition=bacteria --numthreads=4 sequences.fasta mydb
 
 # From standard input
-cat sequences.fasta | perl af_kmerstore.pl stdin mydb
+cat sequences.fasta | af_kmerstore stdin mydb
 
 # Custom parameters
-perl af_kmerstore.pl --datatype=DNA2 --minlen=100000 sequences.fasta mydb
+af_kmerstore --datatype=DNA2 --minlen=100000 sequences.fasta mydb
 ```
 
-### af_kmerpart.pl
+### af_kmerpart
 
 Update partition information for sequences based on accession numbers.
 
 #### Usage
 ```bash
-perl af_kmerpart.pl [options] input_file database_name
+af_kmerpart [options] input_file database_name
 ```
 
 #### Options
@@ -235,22 +236,22 @@ perl af_kmerpart.pl [options] input_file database_name
 #### Examples
 ```bash
 # Add partition to sequences
-perl af_kmerpart.pl --partition=bacteria accessions.txt mydb
+af_kmerpart --partition=bacteria accessions.txt mydb
 
 # Multiple partitions
-perl af_kmerpart.pl --partition=bacteria,archaea accessions.txt mydb
+af_kmerpart --partition=bacteria,archaea accessions.txt mydb
 
 # From standard input
-echo -e "AB123456\nCD789012" | perl af_kmerpart.pl --partition=bacteria stdin mydb
+echo -e "AB123456\nCD789012" | af_kmerpart --partition=bacteria stdin mydb
 ```
 
-### af_kmerindex.pl
+### af_kmerindex
 
 Create or drop GIN indexes on sequence data.
 
 #### Usage
 ```bash
-perl af_kmerindex.pl [options] database_name
+af_kmerindex [options] database_name
 ```
 
 #### Options
@@ -260,22 +261,22 @@ perl af_kmerindex.pl [options] database_name
 #### Examples
 ```bash
 # Create indexes
-perl af_kmerindex.pl --mode=create mydb
+af_kmerindex --mode=create mydb
 
 # Create indexes on specific tablespace
-perl af_kmerindex.pl --mode=create --tablespace=fast_ssd mydb
+af_kmerindex --mode=create --tablespace=fast_ssd mydb
 
 # Drop indexes
-perl af_kmerindex.pl --mode=drop mydb
+af_kmerindex --mode=drop mydb
 ```
 
-### af_kmersearch.pl
+### af_kmersearch
 
 Search DNA sequences using k-mer similarity.
 
 #### Usage
 ```bash
-perl af_kmersearch.pl [options] input_file output_file
+af_kmersearch [options] input_file output_file
 ```
 
 #### Options
@@ -299,25 +300,25 @@ Tab-separated values with 4 columns:
 #### Examples
 ```bash
 # Basic search
-perl af_kmersearch.pl --db=mydb query.fasta results.tsv
+af_kmersearch --db=mydb query.fasta results.tsv
 
 # Search with partition filter
-perl af_kmersearch.pl --db=mydb --partition=bacteria query.fasta results.tsv
+af_kmersearch --db=mydb --partition=bacteria query.fasta results.tsv
 
 # Parallel search with custom parameters
-perl af_kmersearch.pl --db=mydb --numthreads=4 --maxnseq=500 query.fasta results.tsv
+af_kmersearch --db=mydb --numthreads=4 --maxnseq=500 query.fasta results.tsv
 
 # Pipeline usage
-cat query.fasta | perl af_kmersearch.pl --db=mydb stdin stdout > results.tsv
+cat query.fasta | af_kmersearch --db=mydb stdin stdout > results.tsv
 ```
 
-### af_kmerdbinfo.pl
+### af_kmerdbinfo
 
 Display metadata information from af_kmersearch database.
 
 #### Usage
 ```bash
-perl af_kmerdbinfo.pl [options] database_name
+af_kmerdbinfo [options] database_name
 ```
 
 #### Options
@@ -335,32 +336,32 @@ perl af_kmerdbinfo.pl [options] database_name
 #### Examples
 ```bash
 # Basic usage
-perl af_kmerdbinfo.pl mydb
+af_kmerdbinfo mydb
 
 # Remote database
-perl af_kmerdbinfo.pl --host=remote-server mydb
+af_kmerdbinfo --host=remote-server mydb
 
 # Custom connection parameters
-perl af_kmerdbinfo.pl --host=localhost --port=5433 --username=postgres mydb
+af_kmerdbinfo --host=localhost --port=5433 --username=postgres mydb
 ```
 
-### af_kmersearchclient.pl
+### af_kmersearchclient
 
 Remote k-mer search client with asynchronous job processing, load balancing, and retry logic.
 
 #### Usage
 ```bash
 # New job submission
-perl af_kmersearchclient.pl [options] input_file output_file
+af_kmersearchclient [options] input_file output_file
 
 # Resume existing job
-perl af_kmersearchclient.pl --resume=JOB_ID
+af_kmersearchclient --resume=JOB_ID
 
 # Cancel existing job
-perl af_kmersearchclient.pl --cancel=JOB_ID
+af_kmersearchclient --cancel=JOB_ID
 
 # List active jobs
-perl af_kmersearchclient.pl --jobs
+af_kmersearchclient --jobs
 ```
 
 #### Options
@@ -399,7 +400,7 @@ For servers protected by HTTP Basic authentication, use one of these options:
 
 **1. .netrc file (recommended for multiple servers):**
 ```bash
-perl af_kmersearchclient.pl --netrc-file=/path/to/netrc --server=https://server.com --db=mydb query.fasta results.tsv
+af_kmersearchclient --netrc-file=/path/to/netrc --server=https://server.com --db=mydb query.fasta results.tsv
 ```
 
 .netrc format:
@@ -415,7 +416,7 @@ password otherpassword
 
 **2. Command line credentials (for all servers):**
 ```bash
-perl af_kmersearchclient.pl --http-user=myusername --http-password=mypassword --server=https://server.com --db=mydb query.fasta results.tsv
+af_kmersearchclient --http-user=myusername --http-password=mypassword --server=https://server.com --db=mydb query.fasta results.tsv
 ```
 
 **3. Both options (fallback behavior):**
@@ -441,30 +442,30 @@ The client now supports asynchronous job processing with automatic polling:
 #### Examples
 ```bash
 # Basic usage with asynchronous processing
-perl af_kmersearchclient.pl --server=localhost --db=mydb query.fasta results.tsv
+af_kmersearchclient --server=localhost --db=mydb query.fasta results.tsv
 
 # Multiple servers with load balancing
-perl af_kmersearchclient.pl --server="server1,server2,server3" --db=mydb query.fasta results.tsv
+af_kmersearchclient --server="server1,server2,server3" --db=mydb query.fasta results.tsv
 
 # Server list file
-perl af_kmersearchclient.pl --serverlist=servers.txt --db=mydb query.fasta results.tsv
+af_kmersearchclient --serverlist=servers.txt --db=mydb query.fasta results.tsv
 
 # With authentication (.netrc file)
-perl af_kmersearchclient.pl --server=https://server.com --db=mydb --netrc-file=.netrc query.fasta results.tsv
+af_kmersearchclient --server=https://server.com --db=mydb --netrc-file=.netrc query.fasta results.tsv
 
 # With authentication (command line)
-perl af_kmersearchclient.pl --server=https://server.com --db=mydb --http-user=myuser --http-password=mypass query.fasta results.tsv
+af_kmersearchclient --server=https://server.com --db=mydb --http-user=myuser --http-password=mypass query.fasta results.tsv
 
 # Parallel processing with retries
-perl af_kmersearchclient.pl --server=localhost --db=mydb --numthreads=4 --maxnretry=10 query.fasta results.tsv
+af_kmersearchclient --server=localhost --db=mydb --numthreads=4 --maxnretry=10 query.fasta results.tsv
 
 # Pipeline usage
-cat query.fasta | perl af_kmersearchclient.pl --server=localhost --db=mydb stdin stdout > results.tsv
+cat query.fasta | af_kmersearchclient --server=localhost --db=mydb stdin stdout > results.tsv
 
 # Job management examples
-perl af_kmersearchclient.pl --jobs                                    # List active jobs
-perl af_kmersearchclient.pl --resume=20250703T120000-AbCdEf123456     # Resume job
-perl af_kmersearchclient.pl --cancel=20250703T120000-AbCdEf123456     # Cancel job
+af_kmersearchclient --jobs                                    # List active jobs
+af_kmersearchclient --resume=20250703T120000-AbCdEf123456     # Resume job
+af_kmersearchclient --cancel=20250703T120000-AbCdEf123456     # Cancel job
 ```
 
 ### af_kmersearchserver.pl
@@ -515,7 +516,7 @@ Response JSON (job submitted):
 }
 ```
 
-**POST /result** - Get job result or status
+**POST /result** - Get job result (one-time retrieval, removes job after access)
 
 Request JSON:
 ```json
@@ -540,6 +541,15 @@ Response JSON (completed):
 }
 ```
 
+**POST /status** - Check job status (non-destructive, for monitoring)
+
+Request JSON:
+```json
+{
+  "job_id": "20250703T120000-AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+}
+```
+
 Response JSON (still running):
 ```json
 {
@@ -549,7 +559,7 @@ Response JSON (still running):
 }
 ```
 
-**POST /cancel** - Cancel running job
+**POST /cancel** - Cancel running job and remove all associated data
 
 Request JSON:
 ```json
@@ -562,7 +572,7 @@ Response JSON:
 ```json
 {
   "status": "cancelled",
-  "message": "Job has been cancelled"
+  "message": "Job has been cancelled and removed"
 }
 ```
 
@@ -682,27 +692,27 @@ plackup -p 8080 --workers 20 af_kmersearchserver.psgi
 
 1. **Create database and store sequences:**
    ```bash
-   perl af_kmerstore.pl --partition=bacteria sequences.fasta mydb
+   af_kmerstore --partition=bacteria sequences.fasta mydb
    ```
 
 2. **Add partition information:**
    ```bash
-   perl af_kmerpart.pl --partition=pathogenic bacteria_ids.txt mydb
+   af_kmerpart --partition=pathogenic bacteria_ids.txt mydb
    ```
 
 3. **Create indexes:**
    ```bash
-   perl af_kmerindex.pl --mode=create mydb
+   af_kmerindex --mode=create mydb
    ```
 
 4. **Check database information:**
    ```bash
-   perl af_kmerdbinfo.pl mydb
+   af_kmerdbinfo mydb
    ```
 
 5. **Search sequences:**
    ```bash
-   perl af_kmersearch.pl --db=mydb --partition=pathogenic query.fasta results.tsv
+   af_kmersearch --db=mydb --partition=pathogenic query.fasta results.tsv
    ```
 
 ### Web API Deployment

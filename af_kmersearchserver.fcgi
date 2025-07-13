@@ -1082,7 +1082,7 @@ sub get_kmer_size_from_meta {
         if (defined $kmer_size) {
             return $kmer_size;
         } else {
-            die "No k-mer index found. Please run af_kmerindex.pl to create indexes first.\n";
+            die "No k-mer index found. Please run af_kmerindex to create indexes first.\n";
         }
     };
     

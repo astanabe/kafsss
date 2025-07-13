@@ -4,18 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AF KmerSearch Tools is a Perl-based toolkit for DNA sequence analysis using k-mer similarity search with PostgreSQL and the pg_kmersearch extension. The system consists of command-line tools for sequence storage, indexing, searching, and web servers for remote API access.
+The af_kmersearch suite is a comprehensive Perl-based toolkit for DNA sequence analysis using k-mer similarity search with PostgreSQL and the pg_kmersearch extension. The system consists of command-line tools for sequence storage, indexing, searching, and web servers for remote API access with asynchronous job processing.
 
 ## Core Components
 
 ### Command-Line Tools
-- `af_kmerstore.pl` - Store multi-FASTA sequences in PostgreSQL database
-- `af_kmerindex.pl` - Create and manage k-mer search indexes 
-- `af_kmersearch.pl` - Local sequence similarity search
-- `af_kmersearchclient.pl` - Remote API client with job management
-- `af_kmerpart.pl` - Database partitioning utilities
-- `af_kmerdbinfo.pl` - Database information and statistics
-- `calcsegment.pl` - Sequence segmentation calculations
+- `af_kmerstore` - Store multi-FASTA sequences in PostgreSQL database
+- `af_kmerindex` - Create and manage k-mer search indexes 
+- `af_kmersearch` - Local sequence similarity search
+- `af_kmersearchclient` - Remote API client with job management
+- `af_kmerpart` - Database partitioning utilities
+- `af_kmerdbinfo` - Database information and statistics
+- `calcsegment` - Sequence segmentation calculations
 
 ### Server Components
 - `af_kmersearchserver.pl` - Standalone HTTP server
@@ -50,13 +50,16 @@ cpanm DBI DBD::Pg DBD::SQLite JSON LWP::UserAgent HTTP::Request::Common \
 ### Testing the Tools
 ```bash
 # Basic workflow test
-perl af_kmerstore.pl sampledata.fasta testdb
-perl af_kmerindex.pl --mode=create testdb
-perl af_kmersearch.pl --db=testdb sampledata.fasta results.tsv
+af_kmerstore sampledata.fasta testdb
+af_kmerindex --mode=create testdb
+af_kmersearch --db=testdb sampledata.fasta results.tsv
 
-# Test server functionality
-perl af_kmersearchserver.pl --port=8080 &
-perl af_kmersearchclient.pl --server=localhost:8080 --db=testdb sampledata.fasta results.tsv
+# Test server functionality (asynchronous job processing)
+perl af_kmersearchserver.pl --listen-port=8080 &
+af_kmersearchclient --server=localhost --db=testdb sampledata.fasta results.tsv
+
+# Test multi-server load balancing
+af_kmersearchclient --server="server1,server2,server3" --db=testdb sampledata.fasta results.tsv
 ```
 
 ### Code Analysis
@@ -83,16 +86,22 @@ grep -n "pg_kmersearch" *.pl
 - Configurable limits: max jobs, timeouts, result retention
 
 ### Performance Parameters
-- K-mer size: Default 8, configurable via `--kmer_size`
-- Search modes: minimum, normal, maximum (affects sensitivity/speed)
-- Thread counts: Configurable for parallel processing
-- Memory settings: Working memory for index operations
+- K-mer size: Default 8, configurable via `--kmer_size` in af_kmerindex
+- Search modes: minimum, normal, maximum (affects sensitivity/speed) in af_kmersearch
+- Thread counts: Configurable for parallel processing (`--numthreads`)
+- Memory settings: Working memory for index operations (`--workingmemory`)
+- Compression: Database compression options (lz4, pglz, disable) in af_kmerstore
+- Input formats: FASTA, compressed files (.gz, .bz2, .xz, .zst), BLAST databases, wildcards
 
 ## Important Notes
 
 - All tools require PostgreSQL with pg_kmersearch extension
-- Sequence data is processed as FASTA format
+- Supports multiple input formats: FASTA, compressed files, BLAST databases, stdin
 - Results are typically tab-separated values (TSV)
-- Server components support job-based asynchronous processing
-- Authentication via .netrc files or HTTP Basic Auth is supported
-- Comprehensive error handling and logging throughout the codebase
+- Server components support job-based asynchronous processing with SQLite job management
+- Authentication via .netrc files or HTTP Basic Auth is supported for remote servers
+- Load balancing and failover support for multiple servers
+- Job persistence with resume/cancel capabilities
+- Comprehensive error handling, logging, and transaction management throughout the codebase
+- Sequence validation and automatic splitting for large sequences
+- Memory-efficient streaming processing for large datasets

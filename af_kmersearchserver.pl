@@ -76,7 +76,7 @@ if ($help) {
     exit 0;
 }
 
-print "af_kmersearchserver.pl version $VERSION\n";
+print "af_kmersearchserver version $VERSION\n";
 print "PostgreSQL Host: $host\n";
 print "PostgreSQL Port: $port\n";
 print "PostgreSQL Username: $username\n";
@@ -222,7 +222,7 @@ sub format_timestamp {
 
 sub print_help {
     print <<EOF;
-af_kmersearchserver.pl version $VERSION
+af_kmersearchserver version $VERSION
 
 Usage: perl af_kmersearchserver_standalone.pl [options]
 
@@ -1227,7 +1227,7 @@ sub get_kmer_size_from_meta {
         if (defined $kmer_size) {
             return $kmer_size;
         } else {
-            die "No k-mer index found. Please run af_kmerindex.pl to create indexes first.\n";
+            die "No k-mer index found. Please run af_kmerindex to create indexes first.\n";
         }
     };
     

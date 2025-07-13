@@ -58,7 +58,7 @@ if ($help) {
 
 # Check required arguments
 if (@ARGV < 2) {
-    die "Usage: perl af_kmersearch.pl [options] input_file(s) output_file\n" .
+    die "Usage: af_kmersearch [options] input_file(s) output_file\n" .
         "Use --help for detailed usage information.\n";
 }
 
@@ -87,7 +87,7 @@ if (!$normalized_mode) {
 }
 $mode = $normalized_mode;
 
-print "af_kmersearch.pl version $VERSION\n";
+print "af_kmersearch version $VERSION\n";
 print "Input files (" . scalar(@input_files) . "):\n";
 for my $i (0..$#input_files) {
     print "  " . ($i + 1) . ". $input_files[$i]\n";
@@ -218,9 +218,9 @@ exit 0;
 
 sub print_help {
     print <<EOF;
-af_kmersearch.pl version $VERSION
+af_kmersearch version $VERSION
 
-Usage: perl af_kmersearch.pl [options] input_file(s) output_file
+Usage: af_kmersearch [options] input_file(s) output_file
 
 Search DNA sequences from multiple sources against af_kmersearch database using k-mer similarity.
 
@@ -264,31 +264,31 @@ Output format:
 
 Examples:
   # Single file
-  perl af_kmersearch.pl --db=mydb query.fasta results.tsv
+  af_kmersearch --db=mydb query.fasta results.tsv
   
   # Multiple files
-  perl af_kmersearch.pl --db=mydb file1.fasta file2.fasta results.tsv
+  af_kmersearch --db=mydb file1.fasta file2.fasta results.tsv
   
   # Wildcard pattern (use quotes to prevent shell expansion)
-  perl af_kmersearch.pl --db=mydb 'queries/*.fasta' results.tsv
+  af_kmersearch --db=mydb 'queries/*.fasta' results.tsv
   
   # Compressed files
-  perl af_kmersearch.pl --db=mydb query.fasta.gz results.tsv
-  perl af_kmersearch.pl --db=mydb 'data/*.fasta.bz2' results.tsv
+  af_kmersearch --db=mydb query.fasta.gz results.tsv
+  af_kmersearch --db=mydb 'data/*.fasta.bz2' results.tsv
   
   # BLAST database
-  perl af_kmersearch.pl --db=mydb nr results.tsv
+  af_kmersearch --db=mydb nr results.tsv
   
   # Mixed sources
-  perl af_kmersearch.pl --db=mydb file1.fasta 'data/*.gz' blastdb results.tsv
+  af_kmersearch --db=mydb file1.fasta 'data/*.gz' blastdb results.tsv
   
   # With options
-  perl af_kmersearch.pl --db=mydb --partition=bacteria 'queries/*.fasta' results.tsv
-  perl af_kmersearch.pl --db=mydb --maxnseq=500 --minscore=10 query.fasta results.tsv
-  perl af_kmersearch.pl --db=mydb --numthreads=4 --mode=maximum 'data/*.fasta' results.tsv
+  af_kmersearch --db=mydb --partition=bacteria 'queries/*.fasta' results.tsv
+  af_kmersearch --db=mydb --maxnseq=500 --minscore=10 query.fasta results.tsv
+  af_kmersearch --db=mydb --numthreads=4 --mode=maximum 'data/*.fasta' results.tsv
   
   # Standard input
-  cat query.fasta | perl af_kmersearch.pl --db=mydb stdin stdout > results.tsv
+  cat query.fasta | af_kmersearch --db=mydb stdin stdout > results.tsv
 
 EOF
 }
@@ -903,7 +903,7 @@ sub get_kmer_size_from_meta {
         if (defined $kmer_size) {
             return $kmer_size;
         } else {
-            die "No k-mer index found. Please run af_kmerindex.pl to create indexes first.\n";
+            die "No k-mer index found. Please run af_kmerindex to create indexes first.\n";
         }
     };
     
@@ -964,7 +964,7 @@ sub normalize_mode {
     my $normalized = $mode_aliases{lc($mode)};
     return '' unless $normalized;
     
-    # All modes are accepted for af_kmersearch.pl
+    # All modes are accepted for af_kmersearch
     return $normalized;
 }
 

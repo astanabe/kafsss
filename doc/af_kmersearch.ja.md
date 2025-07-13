@@ -1,10 +1,10 @@
-# AF KmerSearch ツール
+# af_kmersearch suite
 
 pg_kmersearch拡張を使用してPostgreSQLでDNA配列の保存、管理、検索を行う包括的なツールキット。
 
 ## 概要
 
-AF KmerSearch ツールは、k-mer類似性検索を使用したDNA配列解析の完全なソリューションを提供します。ツールキットは、DNA配列管理と検索操作の異なる側面を処理する6つのPerlスクリプトで構成されています。
+af_kmersearch suiteは、k-mer類似性検索を使用したDNA配列解析の完全なソリューションを提供します。ツールキットは、DNA配列管理、検索操作、非同期ジョブ処理によるサーバーデプロイメントの異なる側面を処理する10のPerlスクリプトで構成されています。
 
 ## 前提条件
 
@@ -26,7 +26,7 @@ AF KmerSearch ツールは、k-mer類似性検索を使用したDNA配列解析�
 - `Time::HiRes` - 高解像度時間関数（サーバー用）
 - `Fcntl` - ファイル制御操作（サーバー用）
 
-ネットワーククライアント用（af_kmersearchclient.pl）：
+ネットワーククライアント用（af_kmersearchclient）：
 - `LWP::UserAgent` - HTTPクライアント
 - `HTTP::Request::Common` - HTTPリクエスト生成
 - `URI` - URI解析とエンコーディング
@@ -147,15 +147,16 @@ perl -MStarman -e 'print "Starman available\n"'
 
 | スクリプト | 用途 |
 |-----------|------|
-| `af_kmerstore.pl` | FASTA配列をPostgreSQLデータベースに格納 |
-| `af_kmerpart.pl` | 配列のパーティション情報を更新 |
-| `af_kmerindex.pl` | 配列データのGINインデックスを作成/削除 |
-| `af_kmersearch.pl` | k-mer類似性を使用した配列検索 |
-| `af_kmerdbinfo.pl` | データベースメタデータ情報を表示 |
-| `af_kmersearchclient.pl` | 負荷分散機能付きリモートk-mer検索クライアント |
-| `af_kmersearchserver.pl` | k-mer検索用REST APIサーバ（スタンドアローン） |
+| `af_kmerstore` | FASTA配列をPostgreSQLデータベースに格納 |
+| `af_kmerpart` | 配列のパーティション情報を更新 |
+| `af_kmerindex` | 配列データのGINインデックスを作成/削除 |
+| `af_kmersearch` | k-mer類似性を使用した配列検索 |
+| `af_kmerdbinfo` | データベースメタデータ情報を表示 |
+| `af_kmersearchclient` | 負荷分散機能付きリモートk-mer検索クライアント |
+| `af_kmersearchserver.pl` | 非同期ジョブ処理機能付きk-mer検索用REST APIサーバ（スタンドアローン） |
 | `af_kmersearchserver.fcgi` | 本番Webサーバ用FastCGI版 |
 | `af_kmersearchserver.psgi` | モダンなWebデプロイ用PSGI版 |
+| `calcsegment` | 配列分割パラメータ計算用数学ユーティリティ |
 
 ## インストール
 
@@ -177,13 +178,13 @@ perl -MStarman -e 'print "Starman available\n"'
 
 ## スクリプトドキュメント
 
-### af_kmerstore.pl
+### af_kmerstore
 
 マルチFASTA DNA配列をPostgreSQLデータベースに格納します。
 
 #### 使用方法
 ```bash
-perl af_kmerstore.pl [オプション] 入力ファイル名 出力データベース名
+af_kmerstore [オプション] 入力ファイル名 出力データベース名
 ```
 
 #### オプション
@@ -202,25 +203,25 @@ perl af_kmerstore.pl [オプション] 入力ファイル名 出力データベ�
 #### 使用例
 ```bash
 # 基本的な使用方法
-perl af_kmerstore.pl sequences.fasta mydb
+af_kmerstore sequences.fasta mydb
 
 # パーティションと並列処理を使用
-perl af_kmerstore.pl --partition=bacteria --numthreads=4 sequences.fasta mydb
+af_kmerstore --partition=bacteria --numthreads=4 sequences.fasta mydb
 
 # 標準入力から
-cat sequences.fasta | perl af_kmerstore.pl stdin mydb
+cat sequences.fasta | af_kmerstore stdin mydb
 
 # カスタムパラメータ
-perl af_kmerstore.pl --datatype=DNA2 --minlen=100000 sequences.fasta mydb
+af_kmerstore --datatype=DNA2 --minlen=100000 sequences.fasta mydb
 ```
 
-### af_kmerpart.pl
+### af_kmerpart
 
 アクセッション番号に基づいて配列のパーティション情報を更新します。
 
 #### 使用方法
 ```bash
-perl af_kmerpart.pl [オプション] 入力ファイル名 データベース名
+af_kmerpart [オプション] 入力ファイル名 データベース名
 ```
 
 #### オプション
@@ -235,22 +236,22 @@ perl af_kmerpart.pl [オプション] 入力ファイル名 データベース�
 #### 使用例
 ```bash
 # 配列にパーティションを追加
-perl af_kmerpart.pl --partition=bacteria accessions.txt mydb
+af_kmerpart --partition=bacteria accessions.txt mydb
 
 # 複数のパーティション
-perl af_kmerpart.pl --partition=bacteria,archaea accessions.txt mydb
+af_kmerpart --partition=bacteria,archaea accessions.txt mydb
 
 # 標準入力から
-echo -e "AB123456\nCD789012" | perl af_kmerpart.pl --partition=bacteria stdin mydb
+echo -e "AB123456\nCD789012" | af_kmerpart --partition=bacteria stdin mydb
 ```
 
-### af_kmerindex.pl
+### af_kmerindex
 
 配列データのGINインデックスを作成または削除します。
 
 #### 使用方法
 ```bash
-perl af_kmerindex.pl [オプション] データベース名
+af_kmerindex [オプション] データベース名
 ```
 
 #### オプション
@@ -260,22 +261,22 @@ perl af_kmerindex.pl [オプション] データベース名
 #### 使用例
 ```bash
 # インデックス作成
-perl af_kmerindex.pl --mode=create mydb
+af_kmerindex --mode=create mydb
 
 # 特定のテーブルスペースにインデックス作成
-perl af_kmerindex.pl --mode=create --tablespace=fast_ssd mydb
+af_kmerindex --mode=create --tablespace=fast_ssd mydb
 
 # インデックス削除
-perl af_kmerindex.pl --mode=drop mydb
+af_kmerindex --mode=drop mydb
 ```
 
-### af_kmersearch.pl
+### af_kmersearch
 
 k-mer類似性を使用してDNA配列を検索します。
 
 #### 使用方法
 ```bash
-perl af_kmersearch.pl [オプション] 入力ファイル名 出力ファイル名
+af_kmersearch [オプション] 入力ファイル名 出力ファイル名
 ```
 
 #### オプション
@@ -299,25 +300,25 @@ perl af_kmersearch.pl [オプション] 入力ファイル名 出力ファイル
 #### 使用例
 ```bash
 # 基本的な検索
-perl af_kmersearch.pl --db=mydb query.fasta results.tsv
+af_kmersearch --db=mydb query.fasta results.tsv
 
 # パーティションフィルタを使用した検索
-perl af_kmersearch.pl --db=mydb --partition=bacteria query.fasta results.tsv
+af_kmersearch --db=mydb --partition=bacteria query.fasta results.tsv
 
 # カスタムパラメータを使用した並列検索
-perl af_kmersearch.pl --db=mydb --numthreads=4 --maxnseq=500 query.fasta results.tsv
+af_kmersearch --db=mydb --numthreads=4 --maxnseq=500 query.fasta results.tsv
 
 # パイプライン使用
-cat query.fasta | perl af_kmersearch.pl --db=mydb stdin stdout > results.tsv
+cat query.fasta | af_kmersearch --db=mydb stdin stdout > results.tsv
 ```
 
-### af_kmerdbinfo.pl
+### af_kmerdbinfo
 
 af_kmersearchデータベースのメタデータ情報を表示します。
 
 #### 使用方法
 ```bash
-perl af_kmerdbinfo.pl [オプション] データベース名
+af_kmerdbinfo [オプション] データベース名
 ```
 
 #### オプション
@@ -335,32 +336,32 @@ perl af_kmerdbinfo.pl [オプション] データベース名
 #### 使用例
 ```bash
 # 基本的な使用方法
-perl af_kmerdbinfo.pl mydb
+af_kmerdbinfo mydb
 
 # リモートデータベース
-perl af_kmerdbinfo.pl --host=remote-server mydb
+af_kmerdbinfo --host=remote-server mydb
 
 # カスタム接続パラメータ
-perl af_kmerdbinfo.pl --host=localhost --port=5433 --username=postgres mydb
+af_kmerdbinfo --host=localhost --port=5433 --username=postgres mydb
 ```
 
-### af_kmersearchclient.pl
+### af_kmersearchclient
 
 非同期ジョブ処理、負荷分散機能、リトライロジック付きリモートk-mer検索クライアント。
 
 #### 使用方法
 ```bash
 # 新しいジョブ実行
-perl af_kmersearchclient.pl [オプション] 入力ファイル名 出力ファイル名
+af_kmersearchclient [オプション] 入力ファイル名 出力ファイル名
 
 # 既存ジョブの再開
-perl af_kmersearchclient.pl --resume=ジョブID
+af_kmersearchclient --resume=ジョブID
 
 # 既存ジョブのキャンセル
-perl af_kmersearchclient.pl --cancel=ジョブID
+af_kmersearchclient --cancel=ジョブID
 
 # アクティブジョブ一覧
-perl af_kmersearchclient.pl --jobs
+af_kmersearchclient --jobs
 ```
 
 #### オプション
@@ -399,7 +400,7 @@ HTTP Basic認証で保護されたサーバに対しては、以下のオプシ�
 
 **1. .netrcファイル（複数サーバの場合推奨）:**
 ```bash
-perl af_kmersearchclient.pl --netrc-file=/path/to/netrc --server=https://server.com --db=mydb query.fasta results.tsv
+af_kmersearchclient --netrc-file=/path/to/netrc --server=https://server.com --db=mydb query.fasta results.tsv
 ```
 
 .netrc形式:
@@ -415,7 +416,7 @@ password otherpassword
 
 **2. コマンドライン認証情報（全サーバ共通）:**
 ```bash
-perl af_kmersearchclient.pl --http-user=myusername --http-password=mypassword --server=https://server.com --db=mydb query.fasta results.tsv
+af_kmersearchclient --http-user=myusername --http-password=mypassword --server=https://server.com --db=mydb query.fasta results.tsv
 ```
 
 **3. 両オプション併用（フォールバック動作）:**
@@ -441,30 +442,30 @@ perl af_kmersearchclient.pl --http-user=myusername --http-password=mypassword --
 #### 使用例
 ```bash
 # 非同期処理を使用した基本的な使用方法
-perl af_kmersearchclient.pl --server=localhost --db=mydb query.fasta results.tsv
+af_kmersearchclient --server=localhost --db=mydb query.fasta results.tsv
 
 # 負荷分散を使用した複数サーバ
-perl af_kmersearchclient.pl --server="server1,server2,server3" --db=mydb query.fasta results.tsv
+af_kmersearchclient --server="server1,server2,server3" --db=mydb query.fasta results.tsv
 
 # サーバリストファイル
-perl af_kmersearchclient.pl --serverlist=servers.txt --db=mydb query.fasta results.tsv
+af_kmersearchclient --serverlist=servers.txt --db=mydb query.fasta results.tsv
 
 # 認証を使用（.netrcファイル）
-perl af_kmersearchclient.pl --server=https://server.com --db=mydb --netrc-file=.netrc query.fasta results.tsv
+af_kmersearchclient --server=https://server.com --db=mydb --netrc-file=.netrc query.fasta results.tsv
 
 # 認証を使用（コマンドライン）
-perl af_kmersearchclient.pl --server=https://server.com --db=mydb --http-user=myuser --http-password=mypass query.fasta results.tsv
+af_kmersearchclient --server=https://server.com --db=mydb --http-user=myuser --http-password=mypass query.fasta results.tsv
 
 # 並列処理とリトライ
-perl af_kmersearchclient.pl --server=localhost --db=mydb --numthreads=4 --maxnretry=10 query.fasta results.tsv
+af_kmersearchclient --server=localhost --db=mydb --numthreads=4 --maxnretry=10 query.fasta results.tsv
 
 # パイプライン使用
-cat query.fasta | perl af_kmersearchclient.pl --server=localhost --db=mydb stdin stdout > results.tsv
+cat query.fasta | af_kmersearchclient --server=localhost --db=mydb stdin stdout > results.tsv
 
 # ジョブ管理例
-perl af_kmersearchclient.pl --jobs                                    # アクティブジョブ一覧
-perl af_kmersearchclient.pl --resume=20250703T120000-AbCdEf123456     # ジョブ再開
-perl af_kmersearchclient.pl --cancel=20250703T120000-AbCdEf123456     # ジョブキャンセル
+af_kmersearchclient --jobs                                    # アクティブジョブ一覧
+af_kmersearchclient --resume=20250703T120000-AbCdEf123456     # ジョブ再開
+af_kmersearchclient --cancel=20250703T120000-AbCdEf123456     # ジョブキャンセル
 ```
 
 ### af_kmersearchserver.pl
@@ -492,7 +493,7 @@ my $default_numthreads = 5;             # 並列スレッド数
 
 #### APIエンドポイント
 
-**POST /search** - k-mer配列検索
+**POST /search** - 非同期k-mer配列検索ジョブ投入
 
 リクエストJSON:
 ```json
@@ -506,21 +507,72 @@ my $default_numthreads = 5;             # 並列スレッド数
 }
 ```
 
-レスポンスJSON:
+レスポンスJSON（ジョブ投入成功）:
 ```json
 {
+  "job_id": "20250703T120000-AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+  "status": "running",
+  "message": "Job submitted successfully"
+}
+```
+
+**POST /result** - ジョブ結果取得（一回限り、取得後にジョブ削除）
+
+リクエストJSON:
+```json
+{
+  "job_id": "20250703T120000-AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+}
+```
+
+レスポンスJSON（完了時）:
+```json
+{
+  "job_id": "20250703T120000-AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+  "status": "completed",
   "querylabel": "配列名",
   "queryseq": "ATCGATCG...",
-  "db": "データベース名",
-  "partition": "パーティション名",
-  "maxnseq": 1000,
-  "minscore": 10,
   "results": [
     {
       "correctedscore": 95,
       "seqid": ["AB123:1:100", "CD456:50:150"]
     }
   ]
+}
+```
+
+**POST /status** - ジョブ状態確認（非破壊的、監視用）
+
+リクエストJSON:
+```json
+{
+  "job_id": "20250703T120000-AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+}
+```
+
+レスポンスJSON（実行中）:
+```json
+{
+  "job_id": "20250703T120000-AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+  "status": "running",
+  "message": "Job is still processing"
+}
+```
+
+**POST /cancel** - 実行中ジョブのキャンセルと関連データ削除
+
+リクエストJSON:
+```json
+{
+  "job_id": "20250703T120000-AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+}
+```
+
+レスポンスJSON:
+```json
+{
+  "status": "cancelled",
+  "message": "Job has been cancelled and removed"
 }
 ```
 
@@ -640,27 +692,27 @@ plackup -p 8080 --workers 20 af_kmersearchserver.psgi
 
 1. **データベース作成と配列格納:**
    ```bash
-   perl af_kmerstore.pl --partition=bacteria sequences.fasta mydb
+   af_kmerstore --partition=bacteria sequences.fasta mydb
    ```
 
 2. **パーティション情報追加:**
    ```bash
-   perl af_kmerpart.pl --partition=pathogenic bacteria_ids.txt mydb
+   af_kmerpart --partition=pathogenic bacteria_ids.txt mydb
    ```
 
 3. **インデックス作成:**
    ```bash
-   perl af_kmerindex.pl --mode=create mydb
+   af_kmerindex --mode=create mydb
    ```
 
 4. **データベース情報確認:**
    ```bash
-   perl af_kmerdbinfo.pl mydb
+   af_kmerdbinfo mydb
    ```
 
 5. **配列検索:**
    ```bash
-   perl af_kmersearch.pl --db=mydb --partition=pathogenic query.fasta results.tsv
+   af_kmersearch --db=mydb --partition=pathogenic query.fasta results.tsv
    ```
 
 ### Web APIデプロイメント

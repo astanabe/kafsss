@@ -66,7 +66,7 @@ if ($help) {
 
 # Check required arguments
 if (@ARGV < 2) {
-    die "Usage: perl af_kmerstore.pl [options] input_file(s) output_database\n" .
+    die "Usage: af_kmerstore [options] input_file(s) output_database\n" .
         "Use --help for detailed usage information.\n";
 }
 
@@ -104,7 +104,7 @@ for my $partition_spec (@partitions) {
 # Create partition array for PostgreSQL
 my $partition_array = \@all_partitions;
 
-print "af_kmerstore.pl version $VERSION\n";
+print "af_kmerstore version $VERSION\n";
 print "Input files (" . scalar(@input_files) . "):\n";
 for my $i (0..$#input_files) {
     print "  " . ($i + 1) . ". $input_files[$i]\n";
@@ -148,7 +148,7 @@ if ($db_exists && !$overwrite) {
         print "Using existing database '$output_db'\n";
     } elsif ($validation_result == -1) {
         die "Existing database '$output_db' has indexes. Cannot add data while indexes exist.\n" .
-            "To add data, first drop indexes using: perl af_kmerindex.pl --mode=drop $output_db\n";
+            "To add data, first drop indexes using: af_kmerindex --mode=drop $output_db\n";
     } else {
         die "Existing database '$output_db' is not compatible. Parameter mismatch detected.\n" .
             "Use --overwrite to recreate database, or adjust parameters to match existing database.\n" .
@@ -240,9 +240,9 @@ exit 0;
 
 sub print_help {
     print <<EOF;
-af_kmerstore.pl version $VERSION
+af_kmerstore version $VERSION
 
-Usage: perl af_kmerstore.pl [options] input_file(s) output_database
+Usage: af_kmerstore [options] input_file(s) output_database
 
 Store multi-FASTA DNA sequences from multiple sources into PostgreSQL database using pg_kmersearch extension.
 
@@ -278,36 +278,36 @@ Environment variables:
 
 Examples:
   # Single file
-  perl af_kmerstore.pl input.fasta mydb
+  af_kmerstore input.fasta mydb
   
   # Multiple files
-  perl af_kmerstore.pl file1.fasta file2.fasta mydb
+  af_kmerstore file1.fasta file2.fasta mydb
   
   # Wildcard pattern (use quotes to prevent shell expansion)
-  perl af_kmerstore.pl 'data/*.fasta' mydb
-  perl af_kmerstore.pl '/path/to/genomes/*.fna' mydb
+  af_kmerstore 'data/*.fasta' mydb
+  af_kmerstore '/path/to/genomes/*.fna' mydb
   
   # Compressed files
-  perl af_kmerstore.pl genome.fasta.gz mydb
-  perl af_kmerstore.pl 'data/*.fasta.bz2' mydb
-  perl af_kmerstore.pl sequence.fna.xz mydb
-  perl af_kmerstore.pl genome.fasta.zst mydb
+  af_kmerstore genome.fasta.gz mydb
+  af_kmerstore 'data/*.fasta.bz2' mydb
+  af_kmerstore sequence.fna.xz mydb
+  af_kmerstore genome.fasta.zst mydb
   
   # BLAST database
-  perl af_kmerstore.pl nr mydb
-  perl af_kmerstore.pl /databases/nt mydb
+  af_kmerstore nr mydb
+  af_kmerstore /databases/nt mydb
   
   # Mixed sources
-  perl af_kmerstore.pl file1.fasta 'data/*.fasta.gz' blastdb mydb
+  af_kmerstore file1.fasta 'data/*.fasta.gz' blastdb mydb
   
   # With options
-  perl af_kmerstore.pl --datatype=DNA2 --minsplitlen=100000 'genomes/*.fasta' mydb
-  perl af_kmerstore.pl --minlen=1000 --minsplitlen=50000 'genomes/*.fasta' mydb
-  perl af_kmerstore.pl --partition=bacteria,archaea 'bacteria/*.fasta' mydb
-  perl af_kmerstore.pl --overwrite --numthreads=4 'data/*.fasta.gz' mydb
+  af_kmerstore --datatype=DNA2 --minsplitlen=100000 'genomes/*.fasta' mydb
+  af_kmerstore --minlen=1000 --minsplitlen=50000 'genomes/*.fasta' mydb
+  af_kmerstore --partition=bacteria,archaea 'bacteria/*.fasta' mydb
+  af_kmerstore --overwrite --numthreads=4 'data/*.fasta.gz' mydb
   
   # Standard input
-  cat input.fasta | perl af_kmerstore.pl stdin mydb
+  cat input.fasta | af_kmerstore stdin mydb
 
 EOF
 }
