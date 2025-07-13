@@ -434,7 +434,10 @@ SQL
         'nseq' => 'bigint',
         'nchar' => 'bigint',
         'part' => 'jsonb',
-        'kmer_size' => 'integer'
+        'kmer_size' => 'integer',
+        'occur_bitlen' => 'integer',
+        'max_appearance_rate' => 'real',
+        'max_appearance_nrow' => 'integer'
     );
     
     my %actual = ();
@@ -450,7 +453,10 @@ SQL
            $actual{nseq} eq $expected{nseq} &&
            $actual{nchar} eq $expected{nchar} &&
            $actual{part} eq $expected{part} &&
-           $actual{kmer_size} eq $expected{kmer_size};
+           $actual{kmer_size} eq $expected{kmer_size} &&
+           $actual{occur_bitlen} eq $expected{occur_bitlen} &&
+           $actual{max_appearance_rate} eq $expected{max_appearance_rate} &&
+           $actual{max_appearance_nrow} eq $expected{max_appearance_nrow};
 }
 
 sub check_main_table_schema {
@@ -500,7 +506,10 @@ CREATE TABLE IF NOT EXISTS af_kmersearch_meta (
     nseq BIGINT,
     nchar BIGINT,
     part JSONB,
-    kmer_size INTEGER
+    kmer_size INTEGER,
+    occur_bitlen INTEGER,
+    max_appearance_rate REAL,
+    max_appearance_nrow INTEGER
 )
 SQL
     
@@ -509,8 +518,8 @@ SQL
     $sth->execute();
     $sth->finish();
     
-    $sth = $dbh->prepare("INSERT INTO af_kmersearch_meta (ver, minlen, minsplitlen, ovllen, nseq, nchar, part, kmer_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-    $sth->execute($VERSION, $minlen, $minsplitlen, $ovllen, 0, 0, '{}', undef);
+    $sth = $dbh->prepare("INSERT INTO af_kmersearch_meta (ver, minlen, minsplitlen, ovllen, nseq, nchar, part, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $sth->execute($VERSION, $minlen, $minsplitlen, $ovllen, 0, 0, '{}', undef, undef, undef, undef);
     $sth->finish();
     
     # Create main table

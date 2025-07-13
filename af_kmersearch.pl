@@ -20,6 +20,7 @@ my $default_user = $ENV{PGUSER} || getpwuid($<);
 my $default_maxnseq = 1000;
 my $default_numthreads = 1;
 my $default_mode = 'normal';
+my $default_minpsharedkey = 0.9;
 
 # Command line options
 my $host = $default_host;
@@ -29,6 +30,7 @@ my $database = '';
 my $partition = '';
 my $maxnseq = $default_maxnseq;
 my $minscore = undef;
+my $minpsharedkey = $default_minpsharedkey;
 my $numthreads = $default_numthreads;
 my $mode = $default_mode;
 my $help = 0;
@@ -42,6 +44,7 @@ GetOptions(
     'partition=s' => \$partition,
     'maxnseq=i' => \$maxnseq,
     'minscore=i' => \$minscore,
+    'minpsharedkey=f' => \$minpsharedkey,
     'numthreads=i' => \$numthreads,
     'mode=s' => \$mode,
     'help|h' => \$help,
@@ -74,6 +77,7 @@ if (@input_files == 0) {
 die "Database name must be specified with --db option\n" unless $database;
 die "maxnseq must be positive integer\n" unless $maxnseq > 0;
 die "minscore must be positive integer\n" if defined $minscore && $minscore <= 0;
+die "minpsharedkey must be between 0.0 and 1.0\n" unless $minpsharedkey >= 0.0 && $minpsharedkey <= 1.0;
 die "numthreads must be positive integer\n" unless $numthreads > 0;
 
 # Validate mode
@@ -96,6 +100,7 @@ print "Username: $username\n";
 print "Partition: " . ($partition ? $partition : 'all') . "\n";
 print "Max sequences: $maxnseq\n";
 print "Min score: " . (defined $minscore ? $minscore : 'default') . "\n";
+print "Min shared key rate: $minpsharedkey\n";
 print "Number of threads: $numthreads\n";
 print "Mode: $mode\n";
 
@@ -138,6 +143,27 @@ if (defined $minscore) {
     if ($@) {
         die "Failed to set minimum score: $@\n";
     }
+}
+
+# Set minimum shared key rate
+print "Setting minimum shared key rate to $minpsharedkey...\n";
+eval {
+    $dbh->do("SET kmersearch.min_shared_ngram_key_rate = $minpsharedkey");
+    print "Minimum shared key rate set to $minpsharedkey successfully.\n";
+};
+if ($@) {
+    die "Failed to set minimum shared key rate: $@\n";
+}
+
+# Set rawscore cache max entries (maxnseq * 2)
+my $rawscore_cache_max_entries = $maxnseq * 2;
+print "Setting rawscore cache max entries to $rawscore_cache_max_entries...\n";
+eval {
+    $dbh->do("SET kmersearch.rawscore_cache_max_entries = $rawscore_cache_max_entries");
+    print "Rawscore cache max entries set to $rawscore_cache_max_entries successfully.\n";
+};
+if ($@) {
+    die "Failed to set rawscore cache max entries: $@\n";
 }
 
 # Get ovllen from af_kmersearch_meta table for query validation
@@ -217,6 +243,7 @@ Other options:
   --partition=NAME  Limit search to specific partition (optional)
   --maxnseq=INT     Maximum number of results per query (default: 1000)
   --minscore=INT    Minimum score threshold (optional, uses kmersearch.min_score GUC variable)
+  --minpsharedkey=REAL  Minimum percentage of shared keys (0.0-1.0, default: 0.9)
   --numthreads=INT  Number of parallel threads (default: 1)
   --mode=MODE       Output mode: minimum, normal, maximum (default: normal)
   --help, -h        Show this help message
@@ -624,6 +651,23 @@ sub process_single_sequence {
         if ($@) {
             die "Failed to set minimum score in child process: $@\n";
         }
+    }
+    
+    # Set minimum shared key rate
+    eval {
+        $child_dbh->do("SET kmersearch.min_shared_ngram_key_rate = $minpsharedkey");
+    };
+    if ($@) {
+        die "Failed to set minimum shared key rate in child process: $@\n";
+    }
+    
+    # Set rawscore cache max entries (maxnseq * 2)
+    my $child_rawscore_cache_max_entries = $maxnseq * 2;
+    eval {
+        $child_dbh->do("SET kmersearch.rawscore_cache_max_entries = $child_rawscore_cache_max_entries");
+    };
+    if ($@) {
+        die "Failed to set rawscore cache max entries in child process: $@\n";
     }
     
     # Get ovllen for validation

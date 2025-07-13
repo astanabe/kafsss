@@ -22,6 +22,7 @@ my $default_maxnretry_total = 100;
 my $default_retrydelay = 10;
 my $default_failedserverexclusion = -1;  # -1 means infinite (never re-enable)
 my $default_mode = 'normal';
+my $default_minpsharedkey = 0.9;
 
 # Job management settings
 my $job_file = '.af_kmersearchclient';
@@ -34,6 +35,7 @@ my $database = '';  # Now optional
 my $partition = '';
 my $maxnseq = $default_maxnseq;
 my $minscore = undef;
+my $minpsharedkey = $default_minpsharedkey;
 my $numthreads = $default_numthreads;
 my $maxnretry = $default_maxnretry;
 my $maxnretry_total = $default_maxnretry_total;
@@ -56,6 +58,7 @@ GetOptions(
     'partition=s' => \$partition,
     'maxnseq=i' => \$maxnseq,
     'minscore=i' => \$minscore,
+    'minpsharedkey=f' => \$minpsharedkey,
     'numthreads=i' => \$numthreads,
     'maxnretry=i' => \$maxnretry,
     'maxnretry_total=i' => \$maxnretry_total,
@@ -132,6 +135,7 @@ unless ($resume_job_id || $cancel_job_id || $show_jobs) {
     # Database name is now optional - can be omitted if server has default
     die "maxnseq must be positive integer\n" unless $maxnseq > 0;
     die "minscore must be positive integer\n" if defined $minscore && $minscore <= 0;
+    die "minpsharedkey must be between 0.0 and 1.0\n" unless $minpsharedkey >= 0.0 && $minpsharedkey <= 1.0;
     die "numthreads must be positive integer\n" unless $numthreads > 0;
     die "maxnretry must be non-negative integer\n" unless $maxnretry >= 0;
     die "maxnretry_total must be non-negative integer\n" unless $maxnretry_total >= 0;
@@ -176,6 +180,7 @@ print "Database: $database\n";
 print "Partition: " . ($partition ? $partition : 'all') . "\n";
 print "Max sequences: $maxnseq\n";
 print "Min score: " . (defined $minscore ? $minscore : 'default') . "\n";
+print "Min shared key rate: $minpsharedkey\n";
 print "Number of threads: $numthreads\n";
 print "Mode: $mode\n";
 print "Max retries per query: $maxnretry\n";
@@ -237,6 +242,7 @@ save_job_info({
     partition => $partition,
     maxnseq => $maxnseq,
     minscore => $minscore,
+    minpsharedkey => $minpsharedkey,
     mode => $mode,
     created_time => time(),
     status => 'running'
@@ -298,6 +304,9 @@ sub submit_search_job {
     
     # Add minscore if specified
     $job_data->{minscore} = $minscore if defined $minscore;
+    
+    # Add minpsharedkey
+    $job_data->{minpsharedkey} = $minpsharedkey;
     
     my $server_url = get_next_server_url();
     my $job_id = make_job_submission_request($server_url, $job_data);
@@ -751,6 +760,7 @@ Other options:
   --partition=NAME  Limit search to specific partition (optional)
   --maxnseq=INT     Maximum number of results per query (default: 1000)
   --minscore=INT    Minimum score threshold (optional, uses server default if not set)
+  --minpsharedkey=REAL  Minimum percentage of shared keys (0.0-1.0, default: 0.9)
   --numthreads=INT  Number of parallel threads (default: 1, currently unused for async)
   --mode=MODE       Output mode: minimum, normal, maximum (default: normal)
   --maxnretry_total=INT Maximum total retries for all operations (default: 100)

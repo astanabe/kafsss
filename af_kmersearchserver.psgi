@@ -30,6 +30,7 @@ my $default_partition = '';      # Set default partition name here (e.g., 'bacte
 my $default_maxnseq = 1000;      # Set default maxnseq value here
 my $maxmaxnseq = 100000;         # Maximum allowed maxnseq value
 my $default_minscore = '';       # Set default minscore value here (empty = use pg_kmersearch default)
+my $default_minpsharedkey = '';  # Set default minimum shared key rate here (empty = use pg_kmersearch default)
 my $default_mode = 'normal';     # Set default mode (minimum, normal, maximum)
 my $default_listen_port = 5000;  # PSGI server listen port
 my $default_workers = 5;         # Number of worker processes
@@ -322,12 +323,21 @@ sub handle_search_async {
         $request->{partition} ||= $default_partition;
         $request->{maxnseq} ||= $default_maxnseq;
         $request->{minscore} ||= $default_minscore;
+        $request->{minpsharedkey} ||= $default_minpsharedkey;
         $request->{mode} ||= $default_mode;
         
         # Validate values
         if ($request->{maxnseq} > $maxmaxnseq) {
             return send_error_response(400, "INVALID_REQUEST",
                 "maxnseq value ($request->{maxnseq}) exceeds maximum allowed value ($maxmaxnseq)");
+        }
+        
+        # Validate minpsharedkey if specified
+        if (defined $request->{minpsharedkey} && $request->{minpsharedkey} ne '') {
+            if ($request->{minpsharedkey} < 0.0 || $request->{minpsharedkey} > 1.0) {
+                return send_error_response(400, "INVALID_REQUEST",
+                    "minpsharedkey value ($request->{minpsharedkey}) must be between 0.0 and 1.0");
+            }
         }
         
         # Generate job ID with retry logic
@@ -917,6 +927,25 @@ sub perform_database_search {
         if ($@) {
             die "Failed to set minimum score: $@";
         }
+    }
+    
+    # Set minimum shared key rate if specified
+    if (defined $request->{minpsharedkey} && $request->{minpsharedkey} ne '') {
+        eval {
+            $dbh->do("SET kmersearch.min_shared_ngram_key_rate = $request->{minpsharedkey}");
+        };
+        if ($@) {
+            die "Failed to set minimum shared key rate: $@";
+        }
+    }
+    
+    # Set rawscore cache max entries (maxnseq * 2)
+    my $rawscore_cache_max_entries = $request->{maxnseq} * 2;
+    eval {
+        $dbh->do("SET kmersearch.rawscore_cache_max_entries = $rawscore_cache_max_entries");
+    };
+    if ($@) {
+        die "Failed to set rawscore cache max entries: $@";
     }
     
     # Get ovllen from af_kmersearch_meta table for query validation

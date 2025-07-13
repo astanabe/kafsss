@@ -93,6 +93,9 @@ my $dbh = DBI->connect($dsn, $username, $password, {
 # Verify database structure
 verify_database_structure($dbh);
 
+# Check meta table compatibility  
+check_meta_table_compatibility($dbh);
+
 # Acquire advisory lock for exclusive access to prevent conflicts with other tools
 print "Acquiring exclusive lock...\n";
 eval {
@@ -217,9 +220,9 @@ SQL
     die "Table 'af_kmersearch' does not exist in database '$database_name'\n" 
         unless $table_count > 0;
     
-    # Check if required columns exist
+    # Check if required columns exist with correct types
     $sth = $dbh->prepare(<<SQL);
-SELECT column_name
+SELECT column_name, data_type
 FROM information_schema.columns 
 WHERE table_name = 'af_kmersearch'
 AND column_name IN ('seq', 'part', 'seqid')
@@ -227,16 +230,66 @@ ORDER BY column_name
 SQL
     $sth->execute();
     
-    my @columns = ();
-    while (my ($col) = $sth->fetchrow_array()) {
-        push @columns, $col;
+    my %columns = ();
+    while (my ($col, $type) = $sth->fetchrow_array()) {
+        $columns{$col} = $type;
     }
     $sth->finish();
     
-    die "Required columns (seq, part, seqid) not found in table 'af_kmersearch'\n"
-        unless @columns == 3 && $columns[0] eq 'part' && $columns[1] eq 'seq' && $columns[2] eq 'seqid';
+    die "Required columns not found in table 'af_kmersearch'\n"
+        unless exists $columns{seq} && exists $columns{part} && exists $columns{seqid};
+    
+    die "Column 'part' must be ARRAY type\n" unless $columns{part} eq 'ARRAY';
+    die "Column 'seqid' must be ARRAY type\n" unless $columns{seqid} eq 'ARRAY';
+    die "Column 'seq' must be DNA2 or DNA4 type\n" 
+        unless lc($columns{seq}) eq 'dna2' || lc($columns{seq}) eq 'dna4';
     
     print "Database structure verified.\n";
+}
+
+sub check_meta_table_compatibility {
+    my ($dbh) = @_;
+    
+    print "Checking af_kmersearch_meta table compatibility...\n";
+    
+    # Check if af_kmersearch_meta table exists
+    my $sth = $dbh->prepare(<<SQL);
+SELECT COUNT(*)
+FROM information_schema.tables 
+WHERE table_name = 'af_kmersearch_meta'
+SQL
+    $sth->execute();
+    my ($meta_table_count) = $sth->fetchrow_array();
+    $sth->finish();
+    
+    die "Table 'af_kmersearch_meta' does not exist in database '$database_name'\n" 
+        unless $meta_table_count > 0;
+    
+    # Check if new columns exist (added by updated af_kmerstore.pl)
+    $sth = $dbh->prepare(<<SQL);
+SELECT column_name
+FROM information_schema.columns 
+WHERE table_name = 'af_kmersearch_meta'
+AND column_name IN ('kmer_size', 'occur_bitlen', 'max_appearance_rate', 'max_appearance_nrow')
+ORDER BY column_name
+SQL
+    $sth->execute();
+    
+    my @new_columns = ();
+    while (my ($col) = $sth->fetchrow_array()) {
+        push @new_columns, $col;
+    }
+    $sth->finish();
+    
+    if (@new_columns > 0) {
+        print "Found new meta columns: " . join(', ', @new_columns) . "\n";
+        print "Database appears to be updated for new pg_kmersearch specification.\n";
+    } else {
+        print "Warning: New meta columns not found. Database may be from older version.\n";
+        print "Consider updating with latest af_kmerstore.pl\n";
+    }
+    
+    print "Meta table compatibility check completed.\n";
 }
 
 sub process_accessions_single_threaded {
@@ -520,7 +573,7 @@ SQL
     # Prepare partition statistics JSON
     my $part_json = encode_json(\%partition_stats);
     
-    # Update af_kmersearch_meta table
+    # Update af_kmersearch_meta table (preserve existing kmer-related columns)
     print "Updating af_kmersearch_meta table with statistics...\n";
     
     $sth = $dbh->prepare(<<SQL);

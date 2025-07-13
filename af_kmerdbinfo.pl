@@ -78,11 +78,23 @@ unless ($table_count > 0) {
     exit 1;
 }
 
-# Get metadata from af_kmersearch_meta table
-$sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, part FROM af_kmersearch_meta LIMIT 1");
+# Get metadata from af_kmersearch_meta table (including new kmer-related columns)
+$sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, part, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow FROM af_kmersearch_meta LIMIT 1");
 $sth->execute();
-my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $part_json) = $sth->fetchrow_array();
+my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $part_json, $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow) = $sth->fetchrow_array();
 $sth->finish();
+
+# Get sequence data type information
+my $seq_datatype = 'unknown';
+eval {
+    my $datatype_sth = $dbh->prepare(<<SQL);
+SELECT data_type FROM information_schema.columns 
+WHERE table_name = 'af_kmersearch' AND column_name = 'seq'
+SQL
+    $datatype_sth->execute();
+    ($seq_datatype) = $datatype_sth->fetchrow_array();
+    $datatype_sth->finish();
+};
 
 $dbh->disconnect();
 
@@ -95,13 +107,27 @@ unless (defined $ver) {
 # Display basic metadata
 print STDERR "=== Database Metadata ===\n";
 print STDERR "Version: $ver\n";
+print STDERR "Sequence data type: " . uc($seq_datatype || 'unknown') . "\n";
 print STDERR "Min length: $minlen\n";
 print STDERR "Min split length: $minsplitlen\n";
 print STDERR "Overlap length: $ovllen\n";
 print STDERR "Total sequences: $nseq\n";
 print STDERR "Total characters: $nchar\n";
 
+# Display K-mer index configuration if available
+if (defined $kmer_size) {
+    print STDERR "\n=== K-mer Index Configuration ===\n";
+    print STDERR "K-mer size: $kmer_size\n";
+    print STDERR "Occurrence bit length: $occur_bitlen\n";
+    print STDERR "Max appearance rate: $max_appearance_rate\n";
+    print STDERR "Max appearance nrow: $max_appearance_nrow\n";
+} else {
+    print STDERR "\n=== K-mer Index Configuration ===\n";
+    print STDERR "K-mer index: Not configured\n";
+}
+
 # Parse and display partition information
+print STDERR "\n=== Partition Information ===\n";
 if ($part_json) {
     eval {
         my $part_data = decode_json($part_json);

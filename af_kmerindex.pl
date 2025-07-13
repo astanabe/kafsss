@@ -16,6 +16,9 @@ my $default_host = $ENV{PGHOST} || 'localhost';
 my $default_port = $ENV{PGPORT} || 5432;
 my $default_user = $ENV{PGUSER} || getpwuid($<);
 my $default_kmer_size = 8;
+my $default_max_appearance_rate = 0.5;
+my $default_max_appearance_nrow = 0;
+my $default_occur_bitlen = 8;
 
 # Command line options
 my $host = $default_host;
@@ -24,6 +27,10 @@ my $username = $default_user;
 my $tablespace = '';
 my $mode = '';
 my $kmer_size = $default_kmer_size;
+my $max_appearance_rate = $default_max_appearance_rate;
+my $max_appearance_nrow = $default_max_appearance_nrow;
+my $occur_bitlen = $default_occur_bitlen;
+my $numthreads = 0;
 my $workingmemory = '';
 my $help = 0;
 
@@ -35,6 +42,10 @@ GetOptions(
     'tablespace=s' => \$tablespace,
     'mode=s' => \$mode,
     'kmer_size=i' => \$kmer_size,
+    'max_appearance_rate=f' => \$max_appearance_rate,
+    'max_appearance_nrow=i' => \$max_appearance_nrow,
+    'occur_bitlen=i' => \$occur_bitlen,
+    'numthreads=i' => \$numthreads,
     'workingmemory=s' => \$workingmemory,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
@@ -57,8 +68,12 @@ my ($database_name) = @ARGV;
 die "Mode must be specified with --mode option (create or drop)\n" unless $mode;
 die "Invalid mode '$mode'. Must be 'create' or 'drop'\n" unless $mode eq 'create' || $mode eq 'drop';
 
-# Validate kmer_size
+# Validate parameters
 die "kmer_size must be between 4 and 64\n" unless $kmer_size >= 4 && $kmer_size <= 64;
+die "max_appearance_rate must be between 0.0 and 1.0\n" unless $max_appearance_rate >= 0.0 && $max_appearance_rate <= 1.0;
+die "max_appearance_nrow must be non-negative\n" unless $max_appearance_nrow >= 0;
+die "occur_bitlen must be between 0 and 16\n" unless $occur_bitlen >= 0 && $occur_bitlen <= 16;
+die "numthreads must be non-negative\n" unless $numthreads >= 0;
 
 print "af_kmerindex.pl version $VERSION\n";
 print "Database: $database_name\n";
@@ -68,6 +83,10 @@ print "Username: $username\n";
 print "Tablespace: " . ($tablespace ? $tablespace : 'default') . "\n";
 print "Mode: $mode\n";
 print "K-mer size: $kmer_size\n";
+print "Max appearance rate: $max_appearance_rate\n";
+print "Max appearance nrow: $max_appearance_nrow\n";
+print "Occur bitlen: $occur_bitlen\n";
+print "Num threads: " . ($numthreads ? $numthreads : 'default') . "\n";
 print "Working memory: " . ($workingmemory ? $workingmemory : 'default') . "\n";
 
 # Connect to PostgreSQL database
@@ -100,9 +119,16 @@ if ($@) {
 # Verify database structure
 verify_database_structure($dbh);
 
+# Detect PostgreSQL version
+my $pg_version = get_postgresql_version($dbh);
+print "PostgreSQL version: $pg_version\n";
+
+# Set GUC variables
+set_guc_variables($dbh);
+
 # Execute the requested operation
 if ($mode eq 'create') {
-    create_indexes($dbh);
+    create_indexes($dbh, $pg_version);
 } elsif ($mode eq 'drop') {
     drop_indexes($dbh);
 }
@@ -137,7 +163,11 @@ Other options:
   --username=USER   PostgreSQL username (default: \$PGUSER or current user)
   --tablespace=NAME Tablespace name for CREATE INDEX (default: default tablespace)
   --kmer_size=INT   K-mer length for index creation (default: 8, range: 4-64)
-  --workingmemory=SIZE Working memory for index creation (e.g., 64GB, 512MB, default: PostgreSQL setting)
+  --max_appearance_rate=REAL  Max k-mer appearance rate (default: 0.5, range: 0.0-1.0)
+  --max_appearance_nrow=INT   Max rows containing k-mer (default: 0=unlimited)
+  --occur_bitlen=INT          Bits for occurrence count (default: 8, range: 0-16)
+  --numthreads=INT            Number of parallel workers (default: 0=auto)
+  --workingmemory=SIZE        Working memory for index creation (e.g., 64GB, 512MB, default: PostgreSQL setting)
   --help, -h        Show this help message
 
 Environment variables:
@@ -153,6 +183,8 @@ Examples:
   perl af_kmerindex.pl --mode=create --kmer_size=16 mydb
   perl af_kmerindex.pl --mode=create --workingmemory=64GB mydb
   perl af_kmerindex.pl --mode=create --kmer_size=32 --workingmemory=128GB --tablespace=fast_ssd mydb
+  perl af_kmerindex.pl --mode=create --max_appearance_rate=0.3 --max_appearance_nrow=500 mydb
+  perl af_kmerindex.pl --mode=create --occur_bitlen=12 --numthreads=8 mydb
 
 EOF
 }
@@ -212,7 +244,7 @@ SQL
 }
 
 sub create_indexes {
-    my ($dbh) = @_;
+    my ($dbh, $pg_version) = @_;
     
     print "Creating GIN indexes...\n";
     
@@ -221,18 +253,14 @@ sub create_indexes {
         validate_and_set_working_memory($dbh, $workingmemory);
     }
     
-    # Set k-mer size for pg_kmersearch
-    print "Setting k-mer size to $kmer_size...\n";
-    eval {
-        $dbh->do("SET kmersearch.kmer_size = $kmer_size");
-        print "K-mer size set to $kmer_size successfully.\n";
-    };
-    if ($@) {
-        die "Failed to set k-mer size: $@\n";
-    }
+    # Perform high-frequency k-mer analysis
+    perform_highfreq_analysis($dbh);
     
     # Check if indexes already exist
     my $existing_indexes = get_existing_indexes($dbh);
+    
+    # Load cache before creating indexes
+    load_cache($dbh, $pg_version);
     
     # Create seq column GIN index
     my $seq_index_name = 'idx_af_kmersearch_seq_gin';
@@ -294,17 +322,11 @@ sub create_indexes {
         }
     }
     
-    # Update kmer_size in af_kmersearch_meta table
-    print "Updating kmer_size in af_kmersearch_meta table...\n";
-    eval {
-        my $update_sth = $dbh->prepare("UPDATE af_kmersearch_meta SET kmer_size = ?");
-        $update_sth->execute($kmer_size);
-        $update_sth->finish();
-        print "K-mer size set to $kmer_size in af_kmersearch_meta table.\n";
-    };
-    if ($@) {
-        die "Failed to update kmer_size in af_kmersearch_meta table: $@\n";
-    }
+    # Free cache after creating indexes
+    free_cache($dbh, $pg_version);
+    
+    # Update af_kmersearch_meta table
+    update_meta_table($dbh);
     
     print "All indexes created successfully.\n";
 }
@@ -313,6 +335,9 @@ sub drop_indexes {
     my ($dbh) = @_;
     
     print "Dropping GIN indexes...\n";
+    
+    # Undo high-frequency k-mer analysis
+    undo_highfreq_analysis($dbh);
     
     # Get existing indexes
     my $existing_indexes = get_existing_indexes($dbh);
@@ -345,17 +370,8 @@ sub drop_indexes {
         }
     }
     
-    # Set kmer_size to NULL in af_kmersearch_meta table
-    print "Setting kmer_size to NULL in af_kmersearch_meta table...\n";
-    eval {
-        my $update_sth = $dbh->prepare("UPDATE af_kmersearch_meta SET kmer_size = NULL");
-        $update_sth->execute();
-        $update_sth->finish();
-        print "K-mer size set to NULL in af_kmersearch_meta table.\n";
-    };
-    if ($@) {
-        print STDERR "Warning: Failed to update kmer_size in af_kmersearch_meta table: $@\n";
-    }
+    # Clear af_kmersearch_meta table
+    clear_meta_table($dbh);
     
     print "Index dropping completed.\n";
 }
@@ -441,5 +457,220 @@ sub validate_tablespace_exists {
     
     if ($@) {
         die "Failed to validate tablespace '$tablespace_name': $@\n";
+    }
+}
+
+sub get_postgresql_version {
+    my ($dbh) = @_;
+    
+    my $sth = $dbh->prepare("SELECT version()");
+    eval {
+        $sth->execute();
+        my ($version_string) = $sth->fetchrow_array();
+        $sth->finish();
+        
+        # Extract major version number (e.g., "PostgreSQL 16.1" -> 16)
+        if ($version_string =~ /PostgreSQL (\d+)\./) {
+            return $1;
+        } elsif ($version_string =~ /PostgreSQL (\d+)/) {
+            return $1;
+        } else {
+            die "Could not parse PostgreSQL version: $version_string\n";
+        }
+    };
+    
+    if ($@) {
+        die "Failed to get PostgreSQL version: $@\n";
+    }
+}
+
+sub set_guc_variables {
+    my ($dbh) = @_;
+    
+    print "Setting GUC variables...\n";
+    
+    # Set kmer_size
+    eval {
+        $dbh->do("SET kmersearch.kmer_size = $kmer_size");
+        print "Set kmersearch.kmer_size = $kmer_size\n";
+    };
+    if ($@) {
+        die "Failed to set kmersearch.kmer_size: $@\n";
+    }
+    
+    # Set occur_bitlen
+    eval {
+        $dbh->do("SET kmersearch.occur_bitlen = $occur_bitlen");
+        print "Set kmersearch.occur_bitlen = $occur_bitlen\n";
+    };
+    if ($@) {
+        die "Failed to set kmersearch.occur_bitlen: $@\n";
+    }
+    
+    # Set max_appearance_rate
+    eval {
+        $dbh->do("SET kmersearch.max_appearance_rate = $max_appearance_rate");
+        print "Set kmersearch.max_appearance_rate = $max_appearance_rate\n";
+    };
+    if ($@) {
+        die "Failed to set kmersearch.max_appearance_rate: $@\n";
+    }
+    
+    # Set max_appearance_nrow
+    eval {
+        $dbh->do("SET kmersearch.max_appearance_nrow = $max_appearance_nrow");
+        print "Set kmersearch.max_appearance_nrow = $max_appearance_nrow\n";
+    };
+    if ($@) {
+        die "Failed to set kmersearch.max_appearance_nrow: $@\n";
+    }
+    
+    # Set max_parallel_maintenance_workers if numthreads is specified
+    if ($numthreads > 0) {
+        eval {
+            $dbh->do("SET max_parallel_maintenance_workers = $numthreads");
+            print "Set max_parallel_maintenance_workers = $numthreads\n";
+        };
+        if ($@) {
+            die "Failed to set max_parallel_maintenance_workers: $@\n";
+        }
+    }
+    
+    print "GUC variables set successfully.\n";
+}
+
+sub perform_highfreq_analysis {
+    my ($dbh) = @_;
+    
+    print "Performing high-frequency k-mer analysis...\n";
+    
+    eval {
+        my $sth = $dbh->prepare("SELECT kmersearch_perform_highfreq_analysis('af_kmersearch', 'seq')");
+        $sth->execute();
+        my ($result) = $sth->fetchrow_array();
+        $sth->finish();
+        
+        print "High-frequency k-mer analysis completed: $result\n";
+    };
+    
+    if ($@) {
+        die "Failed to perform high-frequency k-mer analysis: $@\n";
+    }
+}
+
+sub undo_highfreq_analysis {
+    my ($dbh) = @_;
+    
+    print "Undoing high-frequency k-mer analysis...\n";
+    
+    eval {
+        my $sth = $dbh->prepare("SELECT kmersearch_undo_highfreq_analysis('af_kmersearch', 'seq')");
+        $sth->execute();
+        my ($result) = $sth->fetchrow_array();
+        $sth->finish();
+        
+        print "High-frequency k-mer analysis undone: $result\n";
+    };
+    
+    if ($@) {
+        die "Failed to undo high-frequency k-mer analysis: $@\n";
+    }
+}
+
+sub load_cache {
+    my ($dbh, $pg_version) = @_;
+    
+    print "Loading k-mer cache...\n";
+    
+    eval {
+        if ($pg_version >= 18) {
+            # PostgreSQL 18+: Use parallel cache
+            my $sth = $dbh->prepare("SELECT kmersearch_parallel_highfreq_kmer_cache_load('af_kmersearch', 'seq')");
+            $sth->execute();
+            $sth->finish();
+            print "Parallel k-mer cache loaded.\n";
+        } else {
+            # PostgreSQL 16-17: Use global cache
+            my $sth = $dbh->prepare("SELECT kmersearch_highfreq_kmer_cache_load('af_kmersearch', 'seq')");
+            $sth->execute();
+            $sth->finish();
+            print "Global k-mer cache loaded.\n";
+        }
+    };
+    
+    if ($@) {
+        die "Failed to load k-mer cache: $@\n";
+    }
+}
+
+sub free_cache {
+    my ($dbh, $pg_version) = @_;
+    
+    print "Freeing k-mer cache...\n";
+    
+    eval {
+        if ($pg_version >= 18) {
+            # PostgreSQL 18+: Use parallel cache
+            my $sth = $dbh->prepare("SELECT kmersearch_parallel_highfreq_kmer_cache_free('af_kmersearch', 'seq')");
+            $sth->execute();
+            $sth->finish();
+            print "Parallel k-mer cache freed.\n";
+        } else {
+            # PostgreSQL 16-17: Use global cache
+            my $sth = $dbh->prepare("SELECT kmersearch_highfreq_kmer_cache_free('af_kmersearch', 'seq')");
+            $sth->execute();
+            $sth->finish();
+            print "Global k-mer cache freed.\n";
+        }
+    };
+    
+    if ($@) {
+        die "Failed to free k-mer cache: $@\n";
+    }
+}
+
+sub update_meta_table {
+    my ($dbh) = @_;
+    
+    print "Updating af_kmersearch_meta table...\n";
+    
+    eval {
+        my $update_sth = $dbh->prepare(<<SQL);
+UPDATE af_kmersearch_meta SET 
+    kmer_size = ?, 
+    max_appearance_rate = ?, 
+    max_appearance_nrow = ?, 
+    occur_bitlen = ?
+SQL
+        $update_sth->execute($kmer_size, $max_appearance_rate, $max_appearance_nrow, $occur_bitlen);
+        $update_sth->finish();
+        print "Metadata updated: kmer_size=$kmer_size, max_appearance_rate=$max_appearance_rate, max_appearance_nrow=$max_appearance_nrow, occur_bitlen=$occur_bitlen\n";
+    };
+    
+    if ($@) {
+        die "Failed to update af_kmersearch_meta table: $@\n";
+    }
+}
+
+sub clear_meta_table {
+    my ($dbh) = @_;
+    
+    print "Clearing af_kmersearch_meta table...\n";
+    
+    eval {
+        my $update_sth = $dbh->prepare(<<SQL);
+UPDATE af_kmersearch_meta SET 
+    kmer_size = NULL, 
+    max_appearance_rate = NULL, 
+    max_appearance_nrow = NULL, 
+    occur_bitlen = NULL
+SQL
+        $update_sth->execute();
+        $update_sth->finish();
+        print "Metadata cleared from af_kmersearch_meta table.\n";
+    };
+    
+    if ($@) {
+        print STDERR "Warning: Failed to clear af_kmersearch_meta table: $@\n";
     }
 }
