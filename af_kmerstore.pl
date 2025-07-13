@@ -22,6 +22,7 @@ my $default_minlen = 64;
 my $default_ovllen = 500;
 my $default_numthreads = 1;
 my $default_compress = 'lz4';
+my $default_batchsize = 100000;
 
 # Command line options
 my $host = $default_host;
@@ -33,6 +34,7 @@ my $minlen = $default_minlen;
 my $ovllen = $default_ovllen;
 my $numthreads = $default_numthreads;
 my $compress = $default_compress;
+my $batchsize = $default_batchsize;
 my @partitions = ();
 my $tablespace = '';
 my $overwrite = 0;
@@ -49,6 +51,7 @@ GetOptions(
     'ovllen=i' => \$ovllen,
     'numthreads=i' => \$numthreads,
     'compress=s' => \$compress,
+    'batchsize=i' => \$batchsize,
     'partition=s' => \@partitions,
     'tablespace=s' => \$tablespace,
     'overwrite:s' => sub {
@@ -94,6 +97,7 @@ die "minsplitlen must be positive integer\n" unless $minsplitlen > 0;
 die "minlen must be non-negative integer\n" unless $minlen >= 0;
 die "ovllen must be non-negative integer\n" unless $ovllen >= 0;
 die "numthreads must be positive integer\n" unless $numthreads > 0;
+die "batchsize must be positive integer\n" unless $batchsize > 0;
 
 # Parse partitions from comma-separated values
 my @all_partitions = ();
@@ -119,6 +123,7 @@ print "Min length: $minlen\n";
 print "Overlap length: $ovllen\n";
 print "Number of threads: $numthreads\n";
 print "Compression: $compress\n";
+print "Batch size: $batchsize\n";
 print "Partitions: " . (@all_partitions ? join(', ', @all_partitions) : 'none') . "\n";
 print "Tablespace: " . ($tablespace ? $tablespace : 'default') . "\n";
 print "Overwrite: " . ($overwrite ? 'yes' : 'no') . "\n";
@@ -265,6 +270,7 @@ Options:
   --ovllen=INT      Overlap length between split sequences (default: 500)
   --numthreads=INT  Number of parallel threads (default: 1)
   --compress=TYPE   Column compression type: lz4, pglz, or disable (default: lz4)
+  --batchsize=INT   Batch size for fragment processing (default: 100000)
   --partition=NAME  Partition name (can be specified multiple times or comma-separated)
   --tablespace=NAME Tablespace name for CREATE DATABASE (default: default tablespace)
   --overwrite       Overwrite existing database (default: false)
@@ -543,30 +549,8 @@ sub process_fasta_file {
     my $fh = open_input_file($filename);
     my $sequence_count = 0;
     
-    # Process sequences with parallel processing
-    if ($numthreads == 1) {
-        # Single-threaded processing - stream one by one
-        while (my $seq_entry = read_next_fasta_entry($fh)) {
-            my $seq_data = {
-                header => $seq_entry->{label},
-                sequence => $seq_entry->{sequence}
-            };
-            process_sequence($seq_data, $dbh);
-            $sequence_count++;
-        }
-    } else {
-        # Multi-threaded processing - need to batch sequences
-        my @sequences = ();
-        while (my $seq_entry = read_next_fasta_entry($fh)) {
-            my $seq_data = {
-                header => $seq_entry->{label},
-                sequence => $seq_entry->{sequence}
-            };
-            push @sequences, $seq_data;
-        }
-        $sequence_count = scalar(@sequences);
-        process_sequences_parallel(\@sequences, $dbh);
-    }
+    # Process sequences with streaming batch processing
+    $sequence_count = process_streaming_with_batches($fh, $dbh);
     
     # Close file handle unless it's STDIN
     unless ($filename eq '-' || $filename eq 'stdin' || $filename eq 'STDIN') {
@@ -603,72 +587,207 @@ sub read_next_fasta_entry {
     return undef;  # Invalid FASTA format
 }
 
-sub process_sequences_parallel {
-    my ($sequences, $dbh) = @_;
+sub process_streaming_with_batches {
+    my ($fh, $dbh) = @_;
     
-    my $seq_count = scalar(@$sequences);
-    my $chunk_size = int($seq_count / $numthreads) + 1;
+    my $sequence_count = 0;
+    my @fragment_batch = ();
+    my @active_children = ();
     
-    my @children = ();
-    
-    for my $thread_id (0 .. $numthreads - 1) {
-        my $start_idx = $thread_id * $chunk_size;
-        last if $start_idx >= $seq_count;
+    # Read and process sequences one by one
+    while (my $seq_entry = read_next_fasta_entry($fh)) {
+        my $seq_data = {
+            header => $seq_entry->{label},
+            sequence => $seq_entry->{sequence}
+        };
         
-        my $end_idx = ($thread_id + 1) * $chunk_size - 1;
-        $end_idx = $seq_count - 1 if $end_idx >= $seq_count;
+        # Process sequence to get fragments
+        my @fragments = process_sequence_to_fragments($seq_data);
+        push @fragment_batch, @fragments;
+        $sequence_count++;
         
-        my $pid = fork();
-        
-        if (!defined $pid) {
-            die "Cannot fork: $!\n";
-        } elsif ($pid == 0) {
-            # Child process
-            # Create new database connection for child
-            my $child_dsn = "DBI:Pg:dbname=$output_db;host=$host;port=$port";
-            my $password = $ENV{PGPASSWORD} || '';
-            
-            my $child_dbh = DBI->connect($child_dsn, $username, $password, {
-                RaiseError => 1,
-                AutoCommit => 0,
-                pg_enable_utf8 => 1
-            }) or die "Cannot connect to database in child process: $DBI::errstr\n";
-            
-            eval {
-                $child_dbh->begin_work;
-                
-                # Process assigned sequences
-                for my $i ($start_idx .. $end_idx) {
-                    process_sequence($sequences->[$i], $child_dbh);
-                }
-                
-                $child_dbh->commit;
-            };
-            
-            if ($@) {
-                print STDERR "Error in child process: $@\n";
-                eval { $child_dbh->rollback; };
-                $child_dbh->disconnect();
-                exit 1;
+        # Check if batch is ready for processing
+        if (scalar(@fragment_batch) >= $batchsize) {
+            # Wait for available slot if we have too many active children
+            while (scalar(@active_children) >= $numthreads) {
+                wait_for_any_child(\@active_children);
             }
             
+            # Start new child process for this batch
+            my $pid = start_child_process(\@fragment_batch);
+            push @active_children, $pid;
+            
+            # Clear batch for next round
+            @fragment_batch = ();
+        }
+    }
+    
+    # Process remaining fragments
+    if (@fragment_batch) {
+        while (scalar(@active_children) >= $numthreads) {
+            wait_for_any_child(\@active_children);
+        }
+        
+        my $pid = start_child_process(\@fragment_batch);
+        push @active_children, $pid;
+    }
+    
+    # Wait for all remaining children to complete
+    while (@active_children) {
+        wait_for_any_child(\@active_children);
+    }
+    
+    print "All batches completed successfully.\n";
+    return $sequence_count;
+}
+
+sub wait_for_any_child {
+    my ($active_children) = @_;
+    
+    my $finished_pid = wait();
+    return unless $finished_pid > 0;
+    
+    if ($? != 0) {
+        die "Child process $finished_pid failed with exit code " . ($? >> 8) . "\n";
+    }
+    
+    # Remove finished child from active list
+    @$active_children = grep { $_ != $finished_pid } @$active_children;
+}
+
+sub start_child_process {
+    my ($fragments) = @_;
+    
+    # Make a copy of fragments for the child
+    my @fragment_copy = @$fragments;
+    
+    my $pid = fork();
+    
+    if (!defined $pid) {
+        die "Cannot fork: $!\n";
+    } elsif ($pid == 0) {
+        # Child process
+        # Create new database connection for child
+        my $child_dsn = "DBI:Pg:dbname=$output_db;host=$host;port=$port";
+        my $password = $ENV{PGPASSWORD} || '';
+        
+        my $child_dbh = DBI->connect($child_dsn, $username, $password, {
+            RaiseError => 1,
+            AutoCommit => 0,
+            pg_enable_utf8 => 1
+        }) or die "Cannot connect to database in child process: $DBI::errstr\n";
+        
+        eval {
+            insert_fragment_batch(\@fragment_copy, $child_dbh);
+        };
+        
+        if ($@) {
+            print STDERR "Error in child process: $@\n";
             $child_dbh->disconnect();
-            exit 0;
-        } else {
-            # Parent process
-            push @children, $pid;
+            exit 1;
         }
+        
+        $child_dbh->disconnect();
+        exit 0;
+    } else {
+        # Parent process
+        return $pid;
+    }
+}
+
+sub process_sequence_to_fragments {
+    my ($seq_data) = @_;
+    
+    my $header = $seq_data->{header};
+    my $sequence = $seq_data->{sequence};
+    
+    # Check sequence length filter
+    if ($minlen > 0 && length($sequence) < $minlen) {
+        print STDERR "Skipping sequence '$header': length " . length($sequence) . " is below minimum length $minlen\n";
+        return ();
     }
     
-    # Wait for all children to complete
-    for my $pid (@children) {
-        waitpid($pid, 0);
-        if ($? != 0) {
-            die "Child process $pid failed with exit code " . ($? >> 8) . "\n";
-        }
+    # Extract accession numbers from header
+    my @accessions = extract_accession($header);
+    
+    # Check if any accession numbers were found
+    if (@accessions == 0) {
+        print STDERR "Warning: No accession number could be extracted from '$header' - skipping database registration\n";
+        return ();
     }
     
-    print "All threads completed successfully.\n";
+    # Split sequence into fragments (get positions only)
+    my @fragment_positions = split_sequence(length($sequence), $sequence);
+    
+    # Create fragment records with sequence data
+    my @fragments = ();
+    for my $fragment_pos (@fragment_positions) {
+        my $start = $fragment_pos->{start};
+        my $end = $fragment_pos->{end};
+        
+        # Extract fragment sequence from main sequence
+        my $fragment_seq = substr($sequence, $start - 1, $end - $start + 1);
+        
+        # Check fragment length filter
+        if ($minlen > 0 && length($fragment_seq) < $minlen) {
+            print STDERR "Skipping fragment: length " . length($fragment_seq) . " is below minimum length $minlen\n";
+            next;
+        }
+        
+        # Build seqids for all accessions
+        my @seqids = ();
+        for my $accession (@accessions) {
+            my $seqid = sprintf("%s:%d:%d", $accession, $start, $end);
+            push @seqids, $seqid;
+        }
+        
+        push @fragments, {
+            sequence => $fragment_seq,
+            seqids => \@seqids
+        };
+    }
+    
+    return @fragments;
+}
+
+sub insert_fragment_batch {
+    my ($fragments, $dbh) = @_;
+    
+    eval {
+        $dbh->begin_work;
+        
+        for my $fragment (@$fragments) {
+            my $fragment_seq = $fragment->{sequence};
+            my $seqids = $fragment->{seqids};
+            
+            # Try to insert new record
+            my $sth = $dbh->prepare(<<SQL);
+INSERT INTO af_kmersearch (seq, part, seqid) 
+VALUES (?, ?, ?) 
+ON CONFLICT (seq) DO UPDATE SET 
+    part = array(SELECT DISTINCT unnest(af_kmersearch.part || ?)), 
+    seqid = array(SELECT DISTINCT unnest(af_kmersearch.seqid || ?))
+SQL
+            
+            $sth->execute(
+                $fragment_seq, 
+                $partition_array, 
+                $seqids,
+                $partition_array,  # for UPDATE part
+                $seqids           # for UPDATE seqid
+            );
+            
+            $sth->finish();
+        }
+        
+        $dbh->commit;
+    };
+    
+    if ($@) {
+        print STDERR "Error in fragment batch insert: $@\n";
+        eval { $dbh->rollback; };
+        die "Fragment batch insert failed: $@\n";
+    }
 }
 
 sub process_sequence {
