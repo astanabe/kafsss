@@ -628,7 +628,7 @@ server {
 <VirtualHost *:80>
     ServerName your-domain.com
     
-    ScriptAlias /api/search /path/to/af_kmersearchweb_fcgi.pl
+    ScriptAlias /api/search /path/to/af_kmersearchserver.fcgi
     
     <Directory "/path/to/">
         SetHandler fcgid-script
