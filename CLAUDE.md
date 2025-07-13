@@ -30,6 +30,20 @@ The af_kmersearch suite is a comprehensive Perl-based toolkit for DNA sequence a
 
 ## Common Development Commands
 
+### Installation
+```bash
+# Install command-line tools via make
+make
+sudo make install
+
+# Custom installation prefix
+make PREFIX=/opt/af_kmersearch
+sudo make install PREFIX=/opt/af_kmersearch
+
+# Note: Server scripts (af_kmersearchserver.pl, .fcgi, .psgi) are not installed by make
+# They should be manually deployed to appropriate web server locations
+```
+
 ### Dependency Management
 ```bash
 # Check all required Perl modules and external tools

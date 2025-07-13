@@ -262,6 +262,23 @@ perl -MStarman -e 'print "Starman available\n"'
 
 ## Installation
 
+### Using make (Recommended)
+
+1. Install pg_kmersearch extension in PostgreSQL
+2. Install command-line tools:
+   ```bash
+   make
+   sudo make install
+   
+   # Custom installation prefix
+   make PREFIX=/opt/af_kmersearch
+   sudo make install PREFIX=/opt/af_kmersearch
+   ```
+
+**Note**: Server scripts (`af_kmersearchserver.pl`, `.fcgi`, `.psgi`) are not installed by make and should be manually deployed to appropriate web server locations.
+
+### Manual Installation
+
 1. Install pg_kmersearch extension in PostgreSQL
 2. Make scripts executable:
    ```bash

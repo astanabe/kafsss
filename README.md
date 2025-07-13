@@ -13,6 +13,20 @@ A comprehensive toolkit for DNA sequence analysis using k-mer similarity search 
 - **Flexible Authentication**: Support for .netrc files and HTTP Basic authentication
 - **Advanced Job Management**: Resume, cancel, and monitor jobs with persistent storage
 
+## Installation
+
+```bash
+# Install command-line tools
+make
+sudo make install
+
+# Custom installation prefix
+make PREFIX=/opt/af_kmersearch
+sudo make install PREFIX=/opt/af_kmersearch
+```
+
+**Note**: Server scripts (`af_kmersearchserver.pl`, `.fcgi`, `.psgi`) are not installed by make and should be manually deployed to appropriate web server locations.
+
 ## Quick Start
 
 ```bash
