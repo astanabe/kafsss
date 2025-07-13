@@ -17,12 +17,14 @@ my $default_host = $ENV{PGHOST} || 'localhost';
 my $default_port = $ENV{PGPORT} || 5432;
 my $default_user = $ENV{PGUSER} || getpwuid($<);
 my $default_numthreads = 1;
+my $default_batchsize = 1000000;
 
 # Command line options
 my $host = $default_host;
 my $port = $default_port;
 my $username = $default_user;
 my $numthreads = $default_numthreads;
+my $batchsize = $default_batchsize;
 my @partitions = ();
 my $help = 0;
 
@@ -32,6 +34,7 @@ GetOptions(
     'port=i' => \$port,
     'username=s' => \$username,
     'numthreads=i' => \$numthreads,
+    'batchsize=i' => \$batchsize,
     'partition=s' => \@partitions,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
@@ -61,6 +64,9 @@ die "Partition name must be specified with --partition option\n" unless @partiti
 # Validate numthreads
 die "numthreads must be positive integer\n" unless $numthreads > 0;
 
+# Validate batchsize
+die "batchsize must be positive integer\n" unless $batchsize > 0;
+
 # Parse partitions from comma-separated values
 my @all_partitions = ();
 for my $partition_spec (@partitions) {
@@ -78,6 +84,7 @@ print "Host: $host\n";
 print "Port: $port\n";
 print "Username: $username\n";
 print "Number of threads: $numthreads\n";
+print "Batch size: $batchsize\n";
 print "Partitions: " . join(', ', @all_partitions) . "\n";
 
 # Connect to PostgreSQL database
@@ -111,15 +118,7 @@ my $lock_dbh = $dbh;
 
 # Process accession numbers with memory-efficient streaming
 print "Processing accession numbers from input file...\n";
-if ($numthreads == 1) {
-    # Single-threaded processing - stream one by one
-    process_accessions_streaming($input_file);
-} else {
-    # Multi-threaded processing - need to batch accessions
-    my @accession_numbers = read_accession_file($input_file);
-    print "Read " . scalar(@accession_numbers) . " accession numbers.\n";
-    process_accessions_parallel(\@accession_numbers);
-}
+process_accessions_batch_streaming($input_file);
 
 # Update statistics in af_kmersearch_meta table
 print "Updating statistics in af_kmersearch_meta table...\n";
@@ -157,6 +156,7 @@ Other options:
   --port=PORT       PostgreSQL server port (default: \$PGPORT or 5432)
   --username=USER   PostgreSQL username (default: \$PGUSER or current user)
   --numthreads=INT  Number of parallel threads (default: 1)
+  --batchsize=INT   Batch size for processing (default: 1000000)
   --help, -h        Show this help message
 
 Environment variables:
@@ -175,9 +175,10 @@ Examples:
 EOF
 }
 
-sub read_accession_file {
+sub process_accessions_batch_streaming {
     my ($filename) = @_;
     
+    # Open input file
     my $fh;
     if ($filename eq '-' || $filename eq 'stdin' || $filename eq 'STDIN') {
         $fh = \*STDIN;
@@ -185,7 +186,9 @@ sub read_accession_file {
         open $fh, '<', $filename or die "Cannot open file '$filename': $!\n";
     }
     
-    my @accessions = ();
+    my @batch = ();
+    my $total_processed = 0;
+    my @active_children = ();
     
     while (my $line = <$fh>) {
         chomp $line;
@@ -194,14 +197,126 @@ sub read_accession_file {
         next if $line eq '';  # Skip empty lines
         next if $line =~ /^#/;  # Skip comment lines
         
-        push @accessions, $line;
+        push @batch, $line;
+        
+        # Process batch when it reaches the specified size
+        if (scalar(@batch) >= $batchsize) {
+            # Wait for available slot if we have reached max threads
+            while (scalar(@active_children) >= $numthreads) {
+                wait_for_child(\@active_children);
+            }
+            
+            # Process this batch
+            my $pid = process_batch(\@batch);
+            if ($pid > 0) {
+                push @active_children, $pid;
+            }
+            
+            $total_processed += scalar(@batch);
+            print "Processed batch: " . scalar(@batch) . " items (total: $total_processed)\n";
+            
+            @batch = ();  # Clear batch
+        }
+    }
+    
+    # Process remaining items in the last batch
+    if (@batch) {
+        # Wait for available slot if we have reached max threads
+        while (scalar(@active_children) >= $numthreads) {
+            wait_for_child(\@active_children);
+        }
+        
+        my $pid = process_batch(\@batch);
+        if ($pid > 0) {
+            push @active_children, $pid;
+        }
+        
+        $total_processed += scalar(@batch);
+        print "Processed final batch: " . scalar(@batch) . " items (total: $total_processed)\n";
+    }
+    
+    # Wait for all remaining children to complete
+    while (@active_children) {
+        wait_for_child(\@active_children);
     }
     
     unless ($filename eq '-' || $filename eq 'stdin' || $filename eq 'STDIN') {
         close $fh;
     }
     
-    return @accessions;
+    print "Total accessions processed: $total_processed\n";
+}
+
+sub process_batch {
+    my ($batch_ref) = @_;
+    
+    if ($numthreads == 1) {
+        # Single-threaded: process directly in current process
+        process_batch_items($batch_ref);
+        return 0;  # No child process created
+    } else {
+        # Multi-threaded: fork a child process
+        my $pid = fork();
+        
+        if (!defined $pid) {
+            die "Cannot fork: $!\n";
+        } elsif ($pid == 0) {
+            # Child process
+            process_batch_items($batch_ref);
+            exit 0;
+        } else {
+            # Parent process
+            return $pid;
+        }
+    }
+}
+
+sub process_batch_items {
+    my ($batch_ref) = @_;
+    
+    # Create new database connection for child process
+    my $password = $ENV{PGPASSWORD} || '';
+    my $child_dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
+                
+    my $child_dbh = DBI->connect($child_dsn, $username, $password, {
+        RaiseError => 1,
+        AutoCommit => 0,
+        pg_enable_utf8 => 1
+    }) or die "Cannot connect to database in child process: $DBI::errstr\n";
+    
+    eval {
+        $child_dbh->begin_work;
+        
+        # Process all items in this batch
+        for my $accession (@$batch_ref) {
+            process_single_accession($accession, $child_dbh);
+        }
+        
+        $child_dbh->commit;
+        print "Batch of " . scalar(@$batch_ref) . " items committed successfully\n";
+    };
+    
+    if ($@) {
+        eval { $child_dbh->rollback; };
+        die "Error processing batch: $@\n";
+    }
+    
+    $child_dbh->disconnect;
+}
+
+sub wait_for_child {
+    my ($active_children_ref) = @_;
+    
+    my $pid = wait();
+    if ($pid > 0) {
+        # Remove completed child from active list
+        @$active_children_ref = grep { $_ != $pid } @$active_children_ref;
+        
+        my $exit_status = $? >> 8;
+        if ($exit_status != 0) {
+            print STDERR "Child process $pid exited with status $exit_status\n";
+        }
+    }
 }
 
 sub verify_database_structure {
@@ -324,136 +439,6 @@ sub process_accessions_single_threaded {
     $dbh->disconnect();
 }
 
-sub process_accessions_streaming {
-    my ($filename) = @_;
-    
-    # Open input file
-    my $fh;
-    if ($filename eq '-' || $filename eq 'stdin' || $filename eq 'STDIN') {
-        $fh = \*STDIN;
-    } else {
-        open $fh, '<', $filename or die "Cannot open file '$filename': $!\n";
-    }
-    
-    # Connect to database
-    my $password = $ENV{PGPASSWORD} || '';
-    my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
-        
-    my $dbh = DBI->connect($dsn, $username, $password, {
-        RaiseError => 1,
-        AutoCommit => 0,
-        pg_enable_utf8 => 1
-    }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
-    
-    my $count = 0;
-    eval {
-        $dbh->begin_work;
-        
-        # Process accessions one by one as they are read
-        while (my $line = <$fh>) {
-            chomp $line;
-            $line =~ s/^\s+|\s+$//g;  # Trim whitespace
-            
-            next if $line eq '';  # Skip empty lines
-            next if $line =~ /^#/;  # Skip comment lines
-            
-            process_single_accession($line, $dbh);
-            $count++;
-            
-            # Progress indicator for large files
-            if ($count % 10000 == 0) {
-                print "Processed $count accession numbers...\n";
-            }
-        }
-        
-        $dbh->commit;
-        print "Transaction committed successfully for streaming processing.\n";
-    };
-    
-    if ($@) {
-        print STDERR "Error during streaming processing: $@\n";
-        eval { $dbh->rollback; };
-        $dbh->disconnect();
-        die "Streaming processing failed: $@\n";
-    }
-    
-    print "Processed $count accession numbers total.\n";
-    
-    $dbh->disconnect();
-    
-    # Close file handle unless it's STDIN
-    unless ($filename eq '-' || $filename eq 'stdin' || $filename eq 'STDIN') {
-        close $fh;
-    }
-}
-
-sub process_accessions_parallel {
-    my ($accessions) = @_;
-    
-    my $acc_count = scalar(@$accessions);
-    my $chunk_size = int($acc_count / $numthreads) + 1;
-    
-    my @children = ();
-    
-    for my $thread_id (0 .. $numthreads - 1) {
-        my $start_idx = $thread_id * $chunk_size;
-        last if $start_idx >= $acc_count;
-        
-        my $end_idx = ($thread_id + 1) * $chunk_size - 1;
-        $end_idx = $acc_count - 1 if $end_idx >= $acc_count;
-        
-        my $pid = fork();
-        
-        if (!defined $pid) {
-            die "Cannot fork: $!\n";
-        } elsif ($pid == 0) {
-            # Child process
-            # Create new database connection for child
-            my $password = $ENV{PGPASSWORD} || '';
-            my $child_dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
-                        
-            my $child_dbh = DBI->connect($child_dsn, $username, $password, {
-                RaiseError => 1,
-                AutoCommit => 0,
-                pg_enable_utf8 => 1
-            }) or die "Cannot connect to database in child process: $DBI::errstr\n";
-            
-            eval {
-                $child_dbh->begin_work;
-                
-                # Process assigned accessions
-                for my $i ($start_idx .. $end_idx) {
-                    process_single_accession($accessions->[$i], $child_dbh);
-                }
-                
-                $child_dbh->commit;
-            };
-            
-            if ($@) {
-                print STDERR "Error in child process: $@\n";
-                eval { $child_dbh->rollback; };
-                $child_dbh->disconnect();
-                exit 1;
-            }
-            
-            $child_dbh->disconnect();
-            exit 0;
-        } else {
-            # Parent process
-            push @children, $pid;
-        }
-    }
-    
-    # Wait for all children to complete
-    for my $pid (@children) {
-        waitpid($pid, 0);
-        if ($? != 0) {
-            die "Child process $pid failed with exit code " . ($? >> 8) . "\n";
-        }
-    }
-    
-    print "All threads completed successfully.\n";
-}
 
 sub process_single_accession {
     my ($accession, $dbh) = @_;
