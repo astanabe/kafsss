@@ -190,7 +190,7 @@ af_kmerstore [options] input_file output_database
 #### Options
 - `--datatype=DNA2|DNA4` - Data type (default: DNA4)
 - `--minlen=INT` - Minimum sequence length for splitting (default: 50000)
-- `--ovllen=INT` - Overlap length between split sequences (default: 500)
+- `--ovllen=INT` - Overlap length between split sequences (default: 500). Must be less than half of `--minsplitlen` to prevent overlap conflicts
 - `--numthreads=INT` - Number of parallel threads (default: 1)
 - `--partition=NAME` - Partition name (multiple values allowed)
 - `--tablespace=NAME` - Tablespace name for CREATE DATABASE

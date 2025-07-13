@@ -190,7 +190,7 @@ af_kmerstore [オプション] 入力ファイル名 出力データベース名
 #### オプション
 - `--datatype=DNA2|DNA4` - データ型（デフォルト: DNA4）
 - `--minlen=INT` - 分割用最小配列長（デフォルト: 50000）
-- `--ovllen=INT` - 分割配列間の重複長（デフォルト: 500）
+- `--ovllen=INT` - 分割配列間の重複長（デフォルト: 500）。重複の競合を防ぐため`--minsplitlen`の半分未満である必要があります
 - `--numthreads=INT` - 並列スレッド数（デフォルト: 1）
 - `--partition=NAME` - パーティション名（複数指定可能）
 - `--tablespace=NAME` - CREATE DATABASE用テーブルスペース名

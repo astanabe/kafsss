@@ -92,6 +92,7 @@ grep -n "pg_kmersearch" *.pl
 - Memory settings: Working memory for index operations (`--workingmemory`)
 - Compression: Database compression options (lz4, pglz, disable) in af_kmerstore
 - Input formats: FASTA, compressed files (.gz, .bz2, .xz, .zst), BLAST databases, wildcards
+- Sequence splitting: `--ovllen` must be less than half of `--minsplitlen` to prevent overlap conflicts
 
 ## Important Notes
 

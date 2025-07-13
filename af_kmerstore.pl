@@ -96,6 +96,7 @@ die "Invalid compress option '$compress'. Must be lz4, pglz, or disable\n"
 die "minsplitlen must be positive integer\n" unless $minsplitlen > 0;
 die "minlen must be non-negative integer\n" unless $minlen >= 0;
 die "ovllen must be non-negative integer\n" unless $ovllen >= 0;
+die "ovllen must be less than half of minsplitlen to prevent overlap conflicts\n" unless $ovllen < $minsplitlen / 2;
 die "numthreads must be positive integer\n" unless $numthreads > 0;
 die "batchsize must be positive integer\n" unless $batchsize > 0;
 
@@ -954,42 +955,35 @@ sub split_long_sequence_positions {
         my $seg_end = $segment->{end};
         my $seg_len = $seg_end - $seg_start + 1;
         
-        if ($seg_len <= $minsplitlen * 2) {
-            # Segment is short enough, don't split
+        # Split long segment with overlap using calcsegment2.pl algorithm
+        my $nsplit = int(($seg_len - $ovllen) / ($minsplitlen - $ovllen));
+        
+        if ($nsplit < 1) {
+            # Cannot split, treat as single fragment
             push @fragments, {
                 start => $seg_start,
                 end => $seg_end
             };
         } else {
-            # Split long segment with overlap
-            my $target_size = int($minsplitlen * 2);
-            my $overlap_step = $target_size - $ovllen;
-            my $num_fragments = $overlap_step > 0 ? int(($seg_len - $ovllen) / $overlap_step) + 1 : 1;
-            
-            # Adjust fragment size to distribute evenly
-            my $fragment_size = int(($seg_len + ($num_fragments - 1) * $ovllen) / $num_fragments);
-            
-            # Ensure fragment size is within bounds
-            $fragment_size = $minsplitlen if $fragment_size < $minsplitlen;
-            $fragment_size = $minsplitlen * 2 if $fragment_size > $minsplitlen * 2;
+            # Calculate fragment distribution
+            my $L = $seg_len - ($nsplit - 1) * $ovllen;
+            my $q = int($L / $nsplit);
+            my $r = $L % $nsplit;
             
             my $pos = 0;
-            
-            while ($pos < $seg_len) {
-                my $end_pos = $pos + $fragment_size;
-                $end_pos = $seg_len if $end_pos > $seg_len;
+            for my $i (0 .. $nsplit - 1) {
+                my $len = $q + ($i < $r ? 1 : 0);
+                $len += $ovllen if $i != $nsplit - 1;
                 
                 my $fragment_start = $seg_start + $pos;
-                my $fragment_end = $seg_start + $end_pos - 1;
+                my $fragment_end = $seg_start + $pos + $len - 1;
                 
                 push @fragments, {
                     start => $fragment_start,
                     end => $fragment_end
                 };
                 
-                # Move to next position with overlap
-                $pos = $end_pos - $ovllen;
-                last if $pos >= $seg_len;
+                $pos += $len - $ovllen;
             }
         }
     }
