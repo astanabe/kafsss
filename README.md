@@ -33,6 +33,9 @@ af_kmersearchclient --server=localhost --db=mydb query.fasta results.tsv
 
 # Multiple servers with load balancing
 af_kmersearchclient --server="server1,server2,server3" --db=mydb query.fasta results.tsv
+
+# Check server metadata and configuration
+curl http://localhost:8080/metadata
 ```
 
 ## Documentation

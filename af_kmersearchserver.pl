@@ -399,6 +399,8 @@ sub handle_request {
         $self->handle_status_request($cgi);
     } elsif ($path eq '/cancel' && $method eq 'POST') {
         $self->handle_cancel_request($cgi);
+    } elsif ($path eq '/metadata' && $method eq 'GET') {
+        $self->handle_metadata_request($cgi);
     } elsif ($path eq '/search' && $method eq 'GET') {
         # Return 405 Method Not Allowed for GET on /search
         $self->send_error_response(405, "METHOD_NOT_ALLOWED", "GET method is not allowed for /search endpoint. Use POST method.");
@@ -462,6 +464,8 @@ sub send_success_response {
     print "X-Job-Queue-Limit: " . $self->{max_jobs} . "\r\n";
     print "\r\n";
     
+    # Add success field to response
+    $data->{success} = JSON::true;
     print encode_json($data);
 }
 
@@ -681,6 +685,25 @@ sub handle_cancel_request {
     
     if ($@) {
         $self->send_error_response(400, "INVALID_REQUEST", "Request error: $@");
+    }
+}
+
+sub handle_metadata_request {
+    my ($self, $cgi) = @_;
+    
+    eval {
+        $self->send_success_response({
+            default_database => $default_database,
+            default_partition => $default_partition,
+            default_maxnseq => $default_maxnseq,
+            default_minscore => $default_minscore,
+            server_version => "1.0",
+            supported_endpoints => ["/search", "/result", "/status", "/cancel", "/metadata"]
+        });
+    };
+    
+    if ($@) {
+        $self->send_error_response(500, "INTERNAL_ERROR", "Server error: $@");
     }
 }
 

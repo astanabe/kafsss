@@ -253,6 +253,8 @@ sub handle_request {
         handle_status_request($cgi);
     } elsif ($path eq '/cancel' && $method eq 'POST') {
         handle_cancel_request($cgi);
+    } elsif ($path eq '/metadata' && $method eq 'GET') {
+        handle_metadata_request($cgi);
     } elsif ($path eq '/search' && $method eq 'GET') {
         # Return 405 Method Not Allowed for GET on /search
         print "Status: 405 Method Not Allowed\r\n";
@@ -473,6 +475,25 @@ sub handle_cancel_request {
     }
 }
 
+sub handle_metadata_request {
+    my ($cgi) = @_;
+    
+    eval {
+        send_success_response({
+            default_database => $default_database,
+            default_partition => $default_partition,
+            default_maxnseq => $default_maxnseq,
+            default_minscore => $default_minscore,
+            server_version => "1.0",
+            supported_endpoints => ["/search", "/result", "/status", "/cancel", "/metadata"]
+        });
+    };
+    
+    if ($@) {
+        send_error_response(500, "INTERNAL_ERROR", "Server error: $@");
+    }
+}
+
 # Core async job management functions
 sub initialize_sqlite_database {
     my ($sqlite_path) = @_;
@@ -649,6 +670,8 @@ sub send_success_response {
     print "X-Job-Queue-Limit: $max_jobs\r\n";
     print "\r\n";
     
+    # Add success field to response
+    $data->{success} = JSON::true;
     print encode_json($data);
 }
 

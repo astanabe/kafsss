@@ -14,102 +14,204 @@ af_kmersearch suiteは、k-mer類似性検索を使用したDNA配列解析の�
 
 ### 必要なPerlモジュール
 
-すべてのコアツールで必要：
-- `DBI` - データベースアクセス（PostgreSQL/SQLite）
+#### コアデータベースツール（af_kmerstore, af_kmerindex, af_kmersearch, af_kmerpart, af_kmerdbinfo）
+- `DBI` - データベースアクセスインターフェース
 - `DBD::Pg` - PostgreSQLドライバ
-- `JSON` - JSON形式の処理
 - `Getopt::Long` - コマンドライン引数解析
 - `POSIX` - POSIXシステム機能
-- `Sys::Hostname` - システムホスト名取得
 - `File::Basename` - ファイル名操作
-- `MIME::Base64` - Base64エンコード/デコード（サーバー用）
-- `Time::HiRes` - 高解像度時間関数（サーバー用）
-- `Fcntl` - ファイル制御操作（サーバー用）
+- `Sys::Hostname` - システムホスト名取得
 
-ネットワーククライアント用（af_kmersearchclient）：
+#### ネットワーククライアント（af_kmersearchclient）
+コアモジュール（上記）に加えて：
+- `JSON` - JSON形式の処理
 - `LWP::UserAgent` - HTTPクライアント
 - `HTTP::Request::Common` - HTTPリクエスト生成
 - `URI` - URI解析とエンコーディング
+- `MIME::Base64` - Base64エンコード/デコード
+- `Time::HiRes` - 高解像度時間関数
+- `Fcntl` - ファイル制御操作
 
-サーバー用モジュール：
-- `HTTP::Server::Simple::CGI` - スタンドアローンWebサーバ（af_kmersearchserver.pl用）
-- `CGI::Fast` および `FCGI::ProcManager` - FastCGI実装（af_kmersearchserver.fcgi用）
-- `Plack::Request`、`Plack::Response`、`Plack::Builder` - PSGI/Plackフレームワーク（af_kmersearchserver.psgi用）
-- `Plack::Handler::Starman` - Starman HTTP サーバー（af_kmersearchserver.psgi用）
-
-オプション（推奨）：
-- `Crypt::OpenSSL::Random` - 暗号学的に安全な乱数
+#### スタンドアローンHTTPサーバ（af_kmersearchserver.pl）
+コアモジュールに加えて：
+- `JSON` - JSON形式の処理
+- `HTTP::Server::Simple::CGI` - スタンドアローンWebサーバ
+- `MIME::Base64` - Base64エンコード/デコード
+- `Time::HiRes` - 高解像度時間関数
+- `Fcntl` - ファイル制御操作
 - `DBD::SQLite` - SQLiteドライバ（ジョブ管理用）
+- `Crypt::OpenSSL::Random` - 暗号学的に安全な乱数
+
+#### FastCGIサーバ（af_kmersearchserver.fcgi）
+コアモジュールに加えて：
+- `JSON` - JSON形式の処理
+- `CGI::Fast` - FastCGI実装
+- `FCGI::ProcManager` - FastCGIプロセス管理
+- `MIME::Base64` - Base64エンコード/デコード
+- `Time::HiRes` - 高解像度時間関数
+- `Fcntl` - ファイル制御操作
+- `DBD::SQLite` - SQLiteドライバ（ジョブ管理用）
+- `Crypt::OpenSSL::Random` - 暗号学的に安全な乱数
+
+#### PSGIサーバ（af_kmersearchserver.psgi）
+コアモジュールに加えて：
+- `JSON` - JSON形式の処理
+- `Plack::Request` - PSGIリクエスト処理
+- `Plack::Response` - PSGIレスポンス処理
+- `Plack::Builder` - PSGIミドルウェア構成
+- `Plack::Handler::Starman` - Starman HTTPサーバ
+- `MIME::Base64` - Base64エンコード/デコード
+- `Time::HiRes` - 高解像度時間関数
+- `Fcntl` - ファイル制御操作
+- `DBD::SQLite` - SQLiteドライバ（ジョブ管理用）
+- `Crypt::OpenSSL::Random` - 暗号学的に安全な乱数
 
 ### 依存関係のインストール
 
-#### Ubuntu/Debian
-
+#### コアデータベースツール用のみ
+**Ubuntu/Debian:**
 ```bash
-# システムパッケージマネージャーでインストール
 sudo apt-get update
-sudo apt-get install -y \
-    perl \
-    libdbi-perl \
-    libdbd-pg-perl \
-    libjson-perl \
-    libwww-perl \
-    liburi-perl \
-    libhttp-server-simple-perl \
-    libcgi-fast-perl \
-    libfcgi-procmanager-perl \
-    libplack-perl \
-    starman
+sudo apt-get install -y perl libdbi-perl libdbd-pg-perl
 
-# または、cpanminusを使用
+# cpanminusを使用
 sudo apt-get install -y cpanminus
-sudo cpanm DBI DBD::Pg JSON LWP::UserAgent HTTP::Request::Common URI \
-           HTTP::Server::Simple::CGI CGI::Fast FCGI::ProcManager \
-           Plack::Request Plack::Response Plack::Builder Plack::Handler::Starman
+sudo cpanm DBI DBD::Pg Getopt::Long POSIX File::Basename Sys::Hostname
 ```
 
-#### RHEL/CentOS/Fedora
-
+**RHEL/CentOS/Fedora:**
 ```bash
-# EPELリポジトリを有効化（RHEL/CentOS用）
-sudo yum install -y epel-release  # CentOS 7
-# または
-sudo dnf install -y epel-release  # CentOS 8/Fedora
+sudo yum install -y perl perl-DBI perl-DBD-Pg
+# または: sudo dnf install -y perl perl-DBI perl-DBD-Pg
 
-# システムパッケージマネージャーでインストール
-sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON perl-libwww-perl \
-                    perl-URI perl-HTTP-Server-Simple perl-CGI-Fast \
-                    perl-FCGI-ProcManager perl-Plack
-# または dnf を使用
-sudo dnf install -y perl perl-DBI perl-DBD-Pg perl-JSON perl-libwww-perl \
-                     perl-URI perl-HTTP-Server-Simple perl-CGI-Fast \
-                     perl-FCGI-ProcManager perl-Plack
-
-# cpanminusを使用（一部のモジュールがパッケージで利用できない場合）
+# cpanminusを使用
 sudo yum install -y perl-App-cpanminus  # または dnf
+sudo cpanm DBI DBD::Pg Getopt::Long POSIX File::Basename Sys::Hostname
+```
+
+#### ネットワーククライアント用（af_kmersearchclient）
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install -y \
+    perl libdbi-perl libdbd-pg-perl libjson-perl \
+    libwww-perl liburi-perl libdbd-sqlite3-perl \
+    libcrypt-openssl-random-perl
+
+# cpanminusを使用
 sudo cpanm DBI DBD::Pg JSON LWP::UserAgent HTTP::Request::Common URI \
-           HTTP::Server::Simple::CGI CGI::Fast FCGI::ProcManager \
-           Plack::Request Plack::Response Plack::Builder Plack::Handler::Starman
+           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
+```
+
+**RHEL/CentOS/Fedora:**
+```bash
+sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON \
+                    perl-libwww-perl perl-URI perl-DBD-SQLite
+# または dnf を使用
+
+# cpanminusを使用
+sudo cpanm DBI DBD::Pg JSON LWP::UserAgent HTTP::Request::Common URI \
+           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
+```
+
+#### スタンドアローンHTTPサーバ用（af_kmersearchserver.pl）
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install -y \
+    perl libdbi-perl libdbd-pg-perl libjson-perl \
+    libhttp-server-simple-perl libdbd-sqlite3-perl \
+    libcrypt-openssl-random-perl
+
+# cpanminusを使用
+sudo cpanm DBI DBD::Pg JSON HTTP::Server::Simple::CGI \
+           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
+```
+
+**RHEL/CentOS/Fedora:**
+```bash
+sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON \
+                    perl-HTTP-Server-Simple perl-DBD-SQLite
+# または dnf を使用
+
+# cpanminusを使用
+sudo cpanm DBI DBD::Pg JSON HTTP::Server::Simple::CGI \
+           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
+```
+
+#### FastCGIサーバ用（af_kmersearchserver.fcgi）
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install -y \
+    perl libdbi-perl libdbd-pg-perl libjson-perl \
+    libcgi-fast-perl libfcgi-procmanager-perl \
+    libdbd-sqlite3-perl libcrypt-openssl-random-perl
+
+# cpanminusを使用
+sudo cpanm DBI DBD::Pg JSON CGI::Fast FCGI::ProcManager \
+           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
+```
+
+**RHEL/CentOS/Fedora:**
+```bash
+sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON \
+                    perl-CGI-Fast perl-FCGI-ProcManager perl-DBD-SQLite
+# または dnf を使用
+
+# cpanminusを使用
+sudo cpanm DBI DBD::Pg JSON CGI::Fast FCGI::ProcManager \
+           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
+```
+
+#### PSGIサーバ用（af_kmersearchserver.psgi）
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install -y \
+    perl libdbi-perl libdbd-pg-perl libjson-perl \
+    libplack-perl starman libdbd-sqlite3-perl \
+    libcrypt-openssl-random-perl
+
+# cpanminusを使用
+sudo cpanm DBI DBD::Pg JSON Plack::Request Plack::Response Plack::Builder \
+           Plack::Handler::Starman MIME::Base64 Time::HiRes Fcntl \
+           DBD::SQLite Crypt::OpenSSL::Random
+```
+
+**RHEL/CentOS/Fedora:**
+```bash
+sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON \
+                    perl-Plack perl-DBD-SQLite
+# または dnf を使用
+
+# cpanminusを使用
+sudo cpanm DBI DBD::Pg JSON Plack::Request Plack::Response Plack::Builder \
+           Plack::Handler::Starman MIME::Base64 Time::HiRes Fcntl \
+           DBD::SQLite Crypt::OpenSSL::Random
 ```
 
 #### 手動インストール（CPAN使用）
 
+**コアデータベースツール用:**
 ```bash
-# CPANシェルで個別インストール
-perl -MCPAN -e 'install DBI'
-perl -MCPAN -e 'install DBD::Pg'
-perl -MCPAN -e 'install JSON'
-perl -MCPAN -e 'install LWP::UserAgent'
-perl -MCPAN -e 'install HTTP::Request::Common'
-perl -MCPAN -e 'install URI'
-perl -MCPAN -e 'install HTTP::Server::Simple::CGI'
-perl -MCPAN -e 'install CGI::Fast'
-perl -MCPAN -e 'install FCGI::ProcManager'
-perl -MCPAN -e 'install Plack'
-perl -MCPAN -e 'install Starman'
+perl -MCPAN -e 'install DBI, DBD::Pg, Getopt::Long, POSIX, File::Basename, Sys::Hostname'
+```
 
-# または一括インストール
-perl -MCPAN -e 'install DBI, DBD::Pg, JSON, LWP::UserAgent, HTTP::Request::Common, URI, HTTP::Server::Simple::CGI, CGI::Fast, FCGI::ProcManager, Plack, Starman'
+**ネットワーククライアント用（af_kmersearchclient）:**
+```bash
+perl -MCPAN -e 'install DBI, DBD::Pg, JSON, LWP::UserAgent, HTTP::Request::Common, URI, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
+```
+
+**スタンドアローンHTTPサーバ用（af_kmersearchserver.pl）:**
+```bash
+perl -MCPAN -e 'install DBI, DBD::Pg, JSON, HTTP::Server::Simple::CGI, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
+```
+
+**FastCGIサーバ用（af_kmersearchserver.fcgi）:**
+```bash
+perl -MCPAN -e 'install DBI, DBD::Pg, JSON, CGI::Fast, FCGI::ProcManager, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
+```
+
+**PSGIサーバ用（af_kmersearchserver.psgi）:**
+```bash
+perl -MCPAN -e 'install DBI, DBD::Pg, JSON, Plack::Request, Plack::Response, Plack::Builder, Plack::Handler::Starman, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
 ```
 
 ### 依存関係確認
@@ -510,6 +612,7 @@ my $default_numthreads = 5;             # 並列スレッド数
 レスポンスJSON（ジョブ投入成功）:
 ```json
 {
+  "success": true,
   "job_id": "20250703T120000-AbCdEfGhIjKlMnOpQrStUvWxYz012345",
   "status": "running",
   "message": "Job submitted successfully"
@@ -576,6 +679,21 @@ my $default_numthreads = 5;             # 並列スレッド数
 }
 ```
 
+**GET /metadata** - サーバ設定および利用可能データベース情報取得
+
+レスポンスJSON:
+```json
+{
+  "success": true,
+  "default_database": "mykmersearch",
+  "default_partition": "bacteria",
+  "default_maxnseq": 1000,
+  "default_minscore": "10",
+  "server_version": "1.0",
+  "supported_endpoints": ["/search", "/result", "/status", "/cancel", "/metadata"]
+}
+```
+
 #### 使用例
 ```bash
 # サーバ起動
@@ -592,6 +710,9 @@ curl -X POST http://localhost:8080/search \
     "queryseq": "ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG",
     "db": "mydb"
   }'
+
+# サーバメタデータ取得
+curl http://localhost:8080/metadata
 ```
 
 ### af_kmersearchserver.fcgi

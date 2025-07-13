@@ -15,7 +15,7 @@ The af_kmersearch suite is a comprehensive Perl-based toolkit for DNA sequence a
 - `af_kmersearchclient` - Remote API client with job management
 - `af_kmerpart` - Database partitioning utilities
 - `af_kmerdbinfo` - Database information and statistics
-- `calcsegment` - Sequence segmentation calculations
+- `calcsegment` - Sequence segmentation calculations (utility planned)
 
 ### Server Components
 - `af_kmersearchserver.pl` - Standalone HTTP server
@@ -60,6 +60,9 @@ af_kmersearchclient --server=localhost --db=testdb sampledata.fasta results.tsv
 
 # Test multi-server load balancing
 af_kmersearchclient --server="server1,server2,server3" --db=testdb sampledata.fasta results.tsv
+
+# Test server metadata endpoint
+curl http://localhost:8080/metadata
 ```
 
 ### Code Analysis
@@ -84,6 +87,7 @@ grep -n "pg_kmersearch" *.pl
 - Default ports: 8080 (HTTP), various for FastCGI/PSGI
 - SQLite job database: `./af_kmersearchserver.sqlite`
 - Configurable limits: max jobs, timeouts, result retention
+- API endpoints: `/search`, `/result`, `/status`, `/cancel`, `/metadata` (GET)
 
 ### Performance Parameters
 - K-mer size: Default 8, configurable via `--kmer_size` in af_kmerindex

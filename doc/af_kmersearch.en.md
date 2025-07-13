@@ -14,102 +14,204 @@ The af_kmersearch suite provides a complete solution for DNA sequence analysis u
 
 ### Required Perl Modules
 
-Core modules required for all tools:
-- `DBI` - Database access (PostgreSQL/SQLite)
+#### Core Database Tools (af_kmerstore, af_kmerindex, af_kmersearch, af_kmerpart, af_kmerdbinfo)
+- `DBI` - Database access interface
 - `DBD::Pg` - PostgreSQL driver
-- `JSON` - JSON format processing
 - `Getopt::Long` - Command line argument parsing
 - `POSIX` - POSIX system functions
-- `Sys::Hostname` - System hostname retrieval
 - `File::Basename` - File name manipulation
-- `MIME::Base64` - Base64 encoding/decoding (for servers)
-- `Time::HiRes` - High-resolution time functions (for servers)
-- `Fcntl` - File control operations (for servers)
+- `Sys::Hostname` - System hostname retrieval
 
-Network client modules (af_kmersearchclient):
+#### Network Client (af_kmersearchclient)
+Core modules (above) plus:
+- `JSON` - JSON format processing
 - `LWP::UserAgent` - HTTP client
 - `HTTP::Request::Common` - HTTP request generation
 - `URI` - URI parsing and encoding
+- `MIME::Base64` - Base64 encoding/decoding
+- `Time::HiRes` - High-resolution time functions
+- `Fcntl` - File control operations
 
-Server modules:
-- `HTTP::Server::Simple::CGI` - Standalone web server (for af_kmersearchserver.pl)
-- `CGI::Fast` and `FCGI::ProcManager` - FastCGI implementation (for af_kmersearchserver.fcgi)
-- `Plack::Request`, `Plack::Response`, `Plack::Builder` - PSGI/Plack framework (for af_kmersearchserver.psgi)
-- `Plack::Handler::Starman` - Starman HTTP server (for af_kmersearchserver.psgi)
-
-Optional modules (recommended):
-- `Crypt::OpenSSL::Random` - Cryptographically secure random numbers
+#### Standalone HTTP Server (af_kmersearchserver.pl)
+Core modules plus:
+- `JSON` - JSON format processing
+- `HTTP::Server::Simple::CGI` - Standalone web server
+- `MIME::Base64` - Base64 encoding/decoding
+- `Time::HiRes` - High-resolution time functions
+- `Fcntl` - File control operations
 - `DBD::SQLite` - SQLite driver (for job management)
+- `Crypt::OpenSSL::Random` - Cryptographically secure random numbers
+
+#### FastCGI Server (af_kmersearchserver.fcgi)
+Core modules plus:
+- `JSON` - JSON format processing
+- `CGI::Fast` - FastCGI implementation
+- `FCGI::ProcManager` - FastCGI process management
+- `MIME::Base64` - Base64 encoding/decoding
+- `Time::HiRes` - High-resolution time functions
+- `Fcntl` - File control operations
+- `DBD::SQLite` - SQLite driver (for job management)
+- `Crypt::OpenSSL::Random` - Cryptographically secure random numbers
+
+#### PSGI Server (af_kmersearchserver.psgi)
+Core modules plus:
+- `JSON` - JSON format processing
+- `Plack::Request` - PSGI request handling
+- `Plack::Response` - PSGI response handling
+- `Plack::Builder` - PSGI middleware composition
+- `Plack::Handler::Starman` - Starman HTTP server
+- `MIME::Base64` - Base64 encoding/decoding
+- `Time::HiRes` - High-resolution time functions
+- `Fcntl` - File control operations
+- `DBD::SQLite` - SQLite driver (for job management)
+- `Crypt::OpenSSL::Random` - Cryptographically secure random numbers
 
 ### Dependency Installation
 
-#### Ubuntu/Debian
-
+#### For Core Database Tools Only
+**Ubuntu/Debian:**
 ```bash
-# Install using system package manager
 sudo apt-get update
-sudo apt-get install -y \
-    perl \
-    libdbi-perl \
-    libdbd-pg-perl \
-    libjson-perl \
-    libwww-perl \
-    liburi-perl \
-    libhttp-server-simple-perl \
-    libcgi-fast-perl \
-    libfcgi-procmanager-perl \
-    libplack-perl \
-    starman
+sudo apt-get install -y perl libdbi-perl libdbd-pg-perl
 
-# Or use cpanminus
+# Using cpanminus
 sudo apt-get install -y cpanminus
-sudo cpanm DBI DBD::Pg JSON LWP::UserAgent HTTP::Request::Common URI \
-           HTTP::Server::Simple::CGI CGI::Fast FCGI::ProcManager \
-           Plack::Request Plack::Response Plack::Builder Plack::Handler::Starman
+sudo cpanm DBI DBD::Pg Getopt::Long POSIX File::Basename Sys::Hostname
 ```
 
-#### RHEL/CentOS/Fedora
-
+**RHEL/CentOS/Fedora:**
 ```bash
-# Enable EPEL repository (for RHEL/CentOS)
-sudo yum install -y epel-release  # CentOS 7
-# or
-sudo dnf install -y epel-release  # CentOS 8/Fedora
+sudo yum install -y perl perl-DBI perl-DBD-Pg
+# or: sudo dnf install -y perl perl-DBI perl-DBD-Pg
 
-# Install using system package manager
-sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON perl-libwww-perl \
-                    perl-URI perl-HTTP-Server-Simple perl-CGI-Fast \
-                    perl-FCGI-ProcManager perl-Plack
-# or use dnf
-sudo dnf install -y perl perl-DBI perl-DBD-Pg perl-JSON perl-libwww-perl \
-                     perl-URI perl-HTTP-Server-Simple perl-CGI-Fast \
-                     perl-FCGI-ProcManager perl-Plack
-
-# Use cpanminus (if some modules are not available as packages)
+# Using cpanminus
 sudo yum install -y perl-App-cpanminus  # or dnf
+sudo cpanm DBI DBD::Pg Getopt::Long POSIX File::Basename Sys::Hostname
+```
+
+#### For Network Client (af_kmersearchclient)
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install -y \
+    perl libdbi-perl libdbd-pg-perl libjson-perl \
+    libwww-perl liburi-perl libdbd-sqlite3-perl \
+    libcrypt-openssl-random-perl
+
+# Using cpanminus
 sudo cpanm DBI DBD::Pg JSON LWP::UserAgent HTTP::Request::Common URI \
-           HTTP::Server::Simple::CGI CGI::Fast FCGI::ProcManager \
-           Plack::Request Plack::Response Plack::Builder Plack::Handler::Starman
+           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
+```
+
+**RHEL/CentOS/Fedora:**
+```bash
+sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON \
+                    perl-libwww-perl perl-URI perl-DBD-SQLite
+# or use dnf
+
+# Using cpanminus
+sudo cpanm DBI DBD::Pg JSON LWP::UserAgent HTTP::Request::Common URI \
+           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
+```
+
+#### For Standalone HTTP Server (af_kmersearchserver.pl)
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install -y \
+    perl libdbi-perl libdbd-pg-perl libjson-perl \
+    libhttp-server-simple-perl libdbd-sqlite3-perl \
+    libcrypt-openssl-random-perl
+
+# Using cpanminus
+sudo cpanm DBI DBD::Pg JSON HTTP::Server::Simple::CGI \
+           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
+```
+
+**RHEL/CentOS/Fedora:**
+```bash
+sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON \
+                    perl-HTTP-Server-Simple perl-DBD-SQLite
+# or use dnf
+
+# Using cpanminus
+sudo cpanm DBI DBD::Pg JSON HTTP::Server::Simple::CGI \
+           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
+```
+
+#### For FastCGI Server (af_kmersearchserver.fcgi)
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install -y \
+    perl libdbi-perl libdbd-pg-perl libjson-perl \
+    libcgi-fast-perl libfcgi-procmanager-perl \
+    libdbd-sqlite3-perl libcrypt-openssl-random-perl
+
+# Using cpanminus
+sudo cpanm DBI DBD::Pg JSON CGI::Fast FCGI::ProcManager \
+           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
+```
+
+**RHEL/CentOS/Fedora:**
+```bash
+sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON \
+                    perl-CGI-Fast perl-FCGI-ProcManager perl-DBD-SQLite
+# or use dnf
+
+# Using cpanminus
+sudo cpanm DBI DBD::Pg JSON CGI::Fast FCGI::ProcManager \
+           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
+```
+
+#### For PSGI Server (af_kmersearchserver.psgi)
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install -y \
+    perl libdbi-perl libdbd-pg-perl libjson-perl \
+    libplack-perl starman libdbd-sqlite3-perl \
+    libcrypt-openssl-random-perl
+
+# Using cpanminus
+sudo cpanm DBI DBD::Pg JSON Plack::Request Plack::Response Plack::Builder \
+           Plack::Handler::Starman MIME::Base64 Time::HiRes Fcntl \
+           DBD::SQLite Crypt::OpenSSL::Random
+```
+
+**RHEL/CentOS/Fedora:**
+```bash
+sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON \
+                    perl-Plack perl-DBD-SQLite
+# or use dnf
+
+# Using cpanminus
+sudo cpanm DBI DBD::Pg JSON Plack::Request Plack::Response Plack::Builder \
+           Plack::Handler::Starman MIME::Base64 Time::HiRes Fcntl \
+           DBD::SQLite Crypt::OpenSSL::Random
 ```
 
 #### Manual Installation (using CPAN)
 
+**For Core Database Tools:**
 ```bash
-# Install individually using CPAN shell
-perl -MCPAN -e 'install DBI'
-perl -MCPAN -e 'install DBD::Pg'
-perl -MCPAN -e 'install JSON'
-perl -MCPAN -e 'install LWP::UserAgent'
-perl -MCPAN -e 'install HTTP::Request::Common'
-perl -MCPAN -e 'install URI'
-perl -MCPAN -e 'install HTTP::Server::Simple::CGI'
-perl -MCPAN -e 'install CGI::Fast'
-perl -MCPAN -e 'install FCGI::ProcManager'
-perl -MCPAN -e 'install Plack'
-perl -MCPAN -e 'install Starman'
+perl -MCPAN -e 'install DBI, DBD::Pg, Getopt::Long, POSIX, File::Basename, Sys::Hostname'
+```
 
-# Or install all at once
-perl -MCPAN -e 'install DBI, DBD::Pg, JSON, LWP::UserAgent, HTTP::Request::Common, URI, HTTP::Server::Simple::CGI, CGI::Fast, FCGI::ProcManager, Plack, Starman'
+**For Network Client (af_kmersearchclient):**
+```bash
+perl -MCPAN -e 'install DBI, DBD::Pg, JSON, LWP::UserAgent, HTTP::Request::Common, URI, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
+```
+
+**For Standalone HTTP Server (af_kmersearchserver.pl):**
+```bash
+perl -MCPAN -e 'install DBI, DBD::Pg, JSON, HTTP::Server::Simple::CGI, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
+```
+
+**For FastCGI Server (af_kmersearchserver.fcgi):**
+```bash
+perl -MCPAN -e 'install DBI, DBD::Pg, JSON, CGI::Fast, FCGI::ProcManager, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
+```
+
+**For PSGI Server (af_kmersearchserver.psgi):**
+```bash
+perl -MCPAN -e 'install DBI, DBD::Pg, JSON, Plack::Request, Plack::Response, Plack::Builder, Plack::Handler::Starman, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
 ```
 
 ### Dependency Verification
@@ -510,6 +612,7 @@ Request JSON:
 Response JSON (job submitted):
 ```json
 {
+  "success": true,
   "job_id": "20250703T120000-AbCdEfGhIjKlMnOpQrStUvWxYz012345",
   "status": "running",
   "message": "Job submitted successfully"
@@ -576,6 +679,21 @@ Response JSON:
 }
 ```
 
+**GET /metadata** - Get server configuration and available databases
+
+Response JSON:
+```json
+{
+  "success": true,
+  "default_database": "mykmersearch",
+  "default_partition": "bacteria",
+  "default_maxnseq": 1000,
+  "default_minscore": "10",
+  "server_version": "1.0",
+  "supported_endpoints": ["/search", "/result", "/status", "/cancel", "/metadata"]
+}
+```
+
 #### Examples
 ```bash
 # Start server
@@ -592,6 +710,9 @@ curl -X POST http://localhost:8080/search \
     "queryseq": "ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG",
     "db": "mydb"
   }'
+
+# Get server metadata
+curl http://localhost:8080/metadata
 ```
 
 ### af_kmersearchserver.fcgi

@@ -253,6 +253,8 @@ sub main_app {
             return handle_status_request($req);
         } elsif ($path eq '/cancel' && $method eq 'POST') {
             return handle_cancel_request($req);
+        } elsif ($path eq '/metadata' && $method eq 'GET') {
+            return handle_metadata_request($req);
         } elsif ($path eq '/search' && $method eq 'GET') {
             # Return 405 Method Not Allowed for GET on /search
             my $res = Plack::Response->new(405);
@@ -475,6 +477,25 @@ sub handle_cancel_request {
     }
 }
 
+sub handle_metadata_request {
+    my ($req) = @_;
+    
+    eval {
+        return send_success_response({
+            default_database => $default_database,
+            default_partition => $default_partition,
+            default_maxnseq => $default_maxnseq,
+            default_minscore => $default_minscore,
+            server_version => "1.0",
+            supported_endpoints => ["/search", "/result", "/status", "/cancel", "/metadata"]
+        });
+    };
+    
+    if ($@) {
+        return send_error_response(500, "INTERNAL_ERROR", "Server error: $@");
+    }
+}
+
 # Core async job management functions
 sub initialize_sqlite_database {
     my ($sqlite_path) = @_;
@@ -639,6 +660,8 @@ sub send_success_response {
     $res->header('X-Job-Queue-Size' => $current_jobs);
     $res->header('X-Job-Queue-Limit' => $max_jobs);
     
+    # Add success field to response
+    $data->{success} = JSON::true;
     $res->body(encode_json($data));
     
     return $res->finalize;

@@ -541,7 +541,7 @@ sub make_job_submission_request {
         Content => $json_data;
     
     # Add authentication if available
-    add_authentication($request, $submit_url);
+    add_auth_credentials($request, $submit_url);
     
     my $response = $ua->request($request);
     
@@ -643,7 +643,7 @@ sub get_job_status {
         'Content-Type' => 'application/json',
         Content => JSON->new->encode({ job_id => $job_id });
     
-    add_authentication($request, $status_url);
+    add_auth_credentials($request, $status_url);
     
     my $response = $ua->request($request);
     
@@ -671,7 +671,7 @@ sub get_job_results {
         'Content-Type' => 'application/json',
         Content => JSON->new->encode({ job_id => $job_id });
     
-    add_authentication($request, $result_url);
+    add_auth_credentials($request, $result_url);
     
     my $response = $ua->request($request);
     
@@ -707,7 +707,7 @@ sub validate_server_metadata {
         
         # Try to get server metadata
         my $request = HTTP::Request->new(GET => $server_url);
-        add_authentication($request, $server_url);
+        add_auth_credentials($request, $server_url);
         
         my $response = $ua->request($request);
         
@@ -738,6 +738,17 @@ sub save_job_info {
     
     my $jobs = load_all_jobs();
     $jobs->{$job_info->{job_id}} = $job_info;
+    
+    my $json = JSON->new->pretty;
+    my $json_data = $json->encode($jobs);
+    
+    open my $fh, '>', $job_file or die "Cannot save job info: $!\n";
+    print $fh $json_data;
+    close $fh;
+}
+
+sub save_jobs {
+    my ($jobs) = @_;
     
     my $json = JSON->new->pretty;
     my $json_data = $json->encode($jobs);
