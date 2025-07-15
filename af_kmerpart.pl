@@ -87,8 +87,22 @@ print "Number of threads: $numthreads\n";
 print "Batch size: $batchsize\n";
 print "Partitions: " . join(', ', @all_partitions) . "\n";
 
-# Connect to PostgreSQL database
+# Connect to PostgreSQL server for validation
 my $password = $ENV{PGPASSWORD} || '';
+my $server_dsn = "DBI:Pg:dbname=postgres;host=$host;port=$port";
+
+my $server_dbh = DBI->connect($server_dsn, $username, $password, {
+    RaiseError => 1,
+    AutoCommit => 1,
+    pg_enable_utf8 => 1
+}) or die "Cannot connect to PostgreSQL server: $DBI::errstr\n";
+
+# Validate user and database existence
+validate_user_and_permissions($server_dbh, $username);
+check_database_exists($server_dbh, $database_name);
+$server_dbh->disconnect();
+
+# Connect to target database
 my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
 
 my $dbh = DBI->connect($dsn, $username, $password, {
@@ -96,6 +110,10 @@ my $dbh = DBI->connect($dsn, $username, $password, {
     AutoCommit => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
+
+# Validate database permissions and schema
+validate_database_permissions($dbh, $username);
+validate_database_schema($dbh);
 
 # Verify database structure
 verify_database_structure($dbh);
@@ -317,6 +335,104 @@ sub wait_for_child {
             print STDERR "Child process $pid exited with status $exit_status\n";
         }
     }
+}
+
+sub validate_user_and_permissions {
+    my ($dbh, $username) = @_;
+    
+    print "Validating user '$username' and permissions...\n";
+    
+    # Check if user exists
+    my $sth = $dbh->prepare("SELECT 1 FROM pg_user WHERE usename = ?");
+    $sth->execute($username);
+    my $user_exists = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($user_exists) {
+        die "Error: PostgreSQL user '$username' does not exist.\n" .
+            "Please create the user first:\n" .
+            "  sudo -u postgres psql\n" .
+            "  CREATE USER $username;\n" .
+            "  \\q\n";
+    }
+    
+    print "User validation completed.\n";
+}
+
+sub check_database_exists {
+    my ($dbh, $dbname) = @_;
+    
+    my $sth = $dbh->prepare("SELECT 1 FROM pg_database WHERE datname = ?");
+    $sth->execute($dbname);
+    my $result = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($result) {
+        die "Error: Database '$dbname' does not exist.\n" .
+            "Please create the database first using af_kmerstore.\n";
+    }
+    
+    print "Database '$dbname' exists.\n";
+}
+
+sub validate_database_permissions {
+    my ($dbh, $username) = @_;
+    
+    print "Validating database permissions for '$username'...\n";
+    
+    # Check if pg_kmersearch extension exists
+    my $sth = $dbh->prepare("SELECT 1 FROM pg_extension WHERE extname = 'pg_kmersearch'");
+    $sth->execute();
+    my $ext_exists = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($ext_exists) {
+        die "Error: Extension 'pg_kmersearch' is not installed in this database.\n" .
+            "Please install it first:\n" .
+            "  sudo -u postgres psql -d " . $dbh->{pg_db} . "\n" .
+            "  CREATE EXTENSION IF NOT EXISTS pg_kmersearch;\n" .
+            "  \\q\n";
+    }
+    
+    # Check table permissions - af_kmerpart needs SELECT, INSERT, UPDATE, DELETE
+    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'af_kmersearch', 'SELECT, INSERT, UPDATE, DELETE')");
+    $sth->execute($username);
+    my $has_table_perm = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($has_table_perm) {
+        die "Error: User '$username' does not have sufficient permissions on af_kmersearch table.\n" .
+            "Please grant permissions:\n" .
+            "  sudo -u postgres psql -d " . $dbh->{pg_db} . "\n" .
+            "  GRANT SELECT, INSERT, UPDATE, DELETE ON af_kmersearch TO $username;\n" .
+            "  \\q\n";
+    }
+    
+    print "Database permissions validation completed.\n";
+}
+
+sub validate_database_schema {
+    my ($dbh) = @_;
+    
+    print "Validating database schema...\n";
+    
+    # Check if required tables exist
+    my @required_tables = ('af_kmersearch_meta', 'af_kmersearch');
+    
+    for my $table (@required_tables) {
+        my $sth = $dbh->prepare("SELECT 1 FROM information_schema.tables WHERE table_name = ?");
+        $sth->execute($table);
+        my $table_exists = $sth->fetchrow_array();
+        $sth->finish();
+        
+        unless ($table_exists) {
+            die "Error: Required table '$table' does not exist in database.\n" .
+                "This database may not have been created with af_kmerstore.\n" .
+                "Please create the database properly using af_kmerstore first.\n";
+        }
+    }
+    
+    print "Database schema validation completed.\n";
 }
 
 sub verify_database_structure {

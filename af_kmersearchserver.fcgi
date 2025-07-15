@@ -755,8 +755,22 @@ sub execute_search_job {
     my ($job_id, $request) = @_;
     
     eval {
-        # Connect to PostgreSQL
+        # Connect to PostgreSQL server for validation
         my $password = $default_password;
+        my $server_dsn = "DBI:Pg:dbname=postgres;host=$host;port=$port";
+        
+        my $server_dbh = DBI->connect($server_dsn, $username, $password, {
+            RaiseError => 1,
+            AutoCommit => 1,
+            pg_enable_utf8 => 1
+        });
+        
+        # Validate user and database existence
+        validate_user_and_permissions($server_dbh, $username);
+        check_database_exists($server_dbh, $request->{db});
+        $server_dbh->disconnect();
+        
+        # Connect to target database
         my $dsn = "DBI:Pg:dbname=$request->{db};host=$host;port=$port";
                 
         my $pg_dbh = DBI->connect($dsn, $username, $password, {
@@ -764,6 +778,10 @@ sub execute_search_job {
             AutoCommit => 1,
             pg_enable_utf8 => 1
         });
+        
+        # Validate database permissions and schema
+        validate_database_permissions($pg_dbh, $username);
+        validate_database_schema($pg_dbh);
         
         # Get kmer_size and store for response building
         my $current_kmer_size = get_kmer_size_from_meta($pg_dbh);
@@ -1314,4 +1332,82 @@ sub normalize_mode {
     
     # Check if mode is accepted
     return grep { $_ eq $normalized } @accepted_modes ? $normalized : '';
+}
+
+sub validate_user_and_permissions {
+    my ($dbh, $username) = @_;
+    
+    # Check if user exists
+    my $sth = $dbh->prepare("SELECT 1 FROM pg_user WHERE usename = ?");
+    $sth->execute($username);
+    my $user_exists = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($user_exists) {
+        die "Error: PostgreSQL user '$username' does not exist.\n";
+    }
+}
+
+sub check_database_exists {
+    my ($dbh, $dbname) = @_;
+    
+    my $sth = $dbh->prepare("SELECT 1 FROM pg_database WHERE datname = ?");
+    $sth->execute($dbname);
+    my $result = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($result) {
+        die "Error: Database '$dbname' does not exist.\n";
+    }
+}
+
+sub validate_database_permissions {
+    my ($dbh, $username) = @_;
+    
+    # Check if pg_kmersearch extension exists
+    my $sth = $dbh->prepare("SELECT 1 FROM pg_extension WHERE extname = 'pg_kmersearch'");
+    $sth->execute();
+    my $ext_exists = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($ext_exists) {
+        die "Error: Extension 'pg_kmersearch' is not installed in this database.\n";
+    }
+    
+    # Check table permissions - server needs SELECT on both tables
+    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'af_kmersearch_meta', 'SELECT')");
+    $sth->execute($username);
+    my $has_meta_perm = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($has_meta_perm) {
+        die "Error: User '$username' does not have SELECT permission on af_kmersearch_meta table.\n";
+    }
+    
+    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'af_kmersearch', 'SELECT')");
+    $sth->execute($username);
+    my $has_table_perm = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($has_table_perm) {
+        die "Error: User '$username' does not have SELECT permission on af_kmersearch table.\n";
+    }
+}
+
+sub validate_database_schema {
+    my ($dbh) = @_;
+    
+    # Check if required tables exist
+    my @required_tables = ('af_kmersearch_meta', 'af_kmersearch');
+    
+    for my $table (@required_tables) {
+        my $sth = $dbh->prepare("SELECT 1 FROM information_schema.tables WHERE table_name = ?");
+        $sth->execute($table);
+        my $table_exists = $sth->fetchrow_array();
+        $sth->finish();
+        
+        unless ($table_exists) {
+            die "Error: Required table '$table' does not exist in database.\n";
+        }
+    }
 }

@@ -169,6 +169,11 @@ if ($netrc_file) {
     %netrc_credentials = parse_netrc_file($netrc_file);
 }
 
+# Validate server connectivity (skip for resume/jobs/cancel mode)
+unless ($resume_job_id || $cancel_job_id || $show_jobs) {
+    validate_server_connectivity();
+}
+
 print "af_kmersearchclient version $VERSION\n";
 print "Input files (" . scalar(@global_input_files) . "):\n";
 for my $i (0..$#global_input_files) {
@@ -1452,4 +1457,66 @@ sub parse_netrc_file {
     close $fh;
     
     return %credentials;
+}
+
+sub validate_server_connectivity {
+    print "Validating server connectivity...\n";
+    
+    # Get server list
+    my @servers = get_server_list();
+    
+    if (@servers == 0) {
+        die "Error: No servers specified. Use --server or --serverlist option.\n";
+    }
+    
+    print "Testing connectivity to " . scalar(@servers) . " server(s)...\n";
+    
+    my $reachable_servers = 0;
+    for my $server (@servers) {
+        my $base_url = "http://$server";
+        if ($server =~ /^https?:\/\//) {
+            $base_url = $server;
+        }
+        
+        # Test metadata endpoint
+        my $metadata_url = "$base_url/metadata";
+        
+        # Create user agent with timeout
+        my $ua = LWP::UserAgent->new();
+        $ua->timeout(10);  # 10 second timeout
+        
+        # Set authentication if provided
+        if ($http_user && $http_password) {
+            $ua->credentials($server, undef, $http_user, $http_password);
+        }
+        
+        # Try to fetch metadata
+        my $response = $ua->get($metadata_url);
+        
+        if ($response->is_success) {
+            print "  ✓ $server - reachable\n";
+            $reachable_servers++;
+            
+            # Try to parse response to validate it's actually a valid server
+            eval {
+                my $metadata = decode_json($response->content);
+                if ($metadata->{status} && $metadata->{status} eq 'ok') {
+                    print "    Server version: " . ($metadata->{version} || 'unknown') . "\n";
+                } else {
+                    print "    Warning: Server returned unexpected metadata format\n";
+                }
+            };
+            if ($@) {
+                print "    Warning: Could not parse server metadata: $@\n";
+            }
+        } else {
+            print "  ✗ $server - unreachable (" . $response->status_line . ")\n";
+        }
+    }
+    
+    if ($reachable_servers == 0) {
+        die "Error: No servers are reachable. Please check your server configuration and network connectivity.\n";
+    }
+    
+    print "Server connectivity validation completed ($reachable_servers/" . scalar(@servers) . " servers reachable).\n";
 }

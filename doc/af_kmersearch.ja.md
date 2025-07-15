@@ -9,8 +9,9 @@ af_kmersearch suiteは、k-mer類似性検索を使用したDNA配列解析の�
 ## 前提条件
 
 - PostgreSQL 9.1以降
-- pg_kmersearch拡張がインストール済み
+- pg_kmersearch拡張がインストール済みで利用可能
 - Perl 5.10以降
+- 適切な権限を持つPostgreSQLユーザー（セットアップ部分参照）
 
 ### 必要なPerlモジュール
 
@@ -65,6 +66,49 @@ af_kmersearch suiteは、k-mer類似性検索を使用したDNA配列解析の�
 - `Fcntl` - ファイル制御操作
 - `DBD::SQLite` - SQLiteドライバ（ジョブ管理用）
 - `Crypt::OpenSSL::Random` - 暗号学的に安全な乱数
+
+### データベースセットアップ
+
+af_kmersearchツールを使用する前に、PostgreSQLを適切に設定する必要があります：
+
+#### 1. PostgreSQLとpg_kmersearch拡張のインストール
+```bash
+sudo apt-get install postgresql postgresql-contrib
+# pg_kmersearch拡張パッケージをインストール（システム管理者にお問い合わせください）
+```
+
+#### 2. PostgreSQLユーザーとデータベースの作成
+```bash
+sudo -u postgres psql
+CREATE USER yourusername CREATEDB;
+ALTER USER yourusername PASSWORD 'yourpassword';
+\q
+```
+
+#### 3. 環境変数の設定
+```bash
+export PGUSER=yourusername
+export PGPASSWORD=yourpassword
+export PGHOST=localhost
+export PGPORT=5432
+```
+
+#### 4. データベースに拡張を作成
+**オプションA: スーパーユーザーが拡張を作成（推奨）**
+```bash
+sudo -u postgres psql -d your_database
+CREATE EXTENSION IF NOT EXISTS pg_kmersearch;
+\q
+```
+
+**オプションB: 一時的にスーパーユーザー権限を付与**
+```bash
+sudo -u postgres psql
+ALTER USER yourusername SUPERUSER;
+\q
+# af_kmerstoreを実行後、権限を取り消す：
+# ALTER USER yourusername NOSUPERUSER;
+```
 
 ### 依存関係のインストール
 

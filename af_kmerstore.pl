@@ -139,6 +139,9 @@ my $dbh = DBI->connect($dsn, $username, $password, {
     pg_enable_utf8 => 1
 }) or die "Cannot connect to PostgreSQL server: $DBI::errstr\n";
 
+# Validate user existence and permissions
+validate_user_and_permissions($dbh, $username);
+
 # Validate tablespace if specified
 if ($tablespace) {
     validate_tablespace_exists($dbh, $tablespace);
@@ -500,8 +503,8 @@ sub setup_database {
     
     print "Setting up database schema...\n";
     
-    # Enable pg_kmersearch extension
-    $dbh->do("CREATE EXTENSION IF NOT EXISTS pg_kmersearch");
+    # Check if pg_kmersearch extension is available and create if needed
+    check_and_create_extension($dbh, "pg_kmersearch");
     
     # Create meta table
     $dbh->do(<<SQL);
@@ -1201,6 +1204,102 @@ sub expand_input_files {
     }
     
     return @files;
+}
+
+sub validate_user_and_permissions {
+    my ($dbh, $username) = @_;
+    
+    print "Validating user '$username' and permissions...\n";
+    
+    # Check if user exists
+    my $sth = $dbh->prepare("SELECT 1 FROM pg_user WHERE usename = ?");
+    $sth->execute($username);
+    my $user_exists = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($user_exists) {
+        die "Error: PostgreSQL user '$username' does not exist.\n" .
+            "Please create the user first:\n" .
+            "  sudo -u postgres psql\n" .
+            "  CREATE USER $username;\n" .
+            "  \\q\n";
+    }
+    
+    # Check CREATE DATABASE permission
+    $sth = $dbh->prepare("SELECT usesuper, usecreatedb FROM pg_user WHERE usename = ?");
+    $sth->execute($username);
+    my ($is_superuser, $can_create_db) = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($is_superuser || $can_create_db) {
+        die "Error: User '$username' does not have CREATE DATABASE permission.\n" .
+            "Please grant the permission:\n" .
+            "  sudo -u postgres psql\n" .
+            "  ALTER USER $username CREATEDB;\n" .
+            "  \\q\n";
+    }
+    
+    print "User validation completed.\n";
+}
+
+sub check_and_create_extension {
+    my ($dbh, $extension_name) = @_;
+    
+    print "Checking pg_kmersearch extension...\n";
+    
+    # Check if extension already exists
+    my $sth = $dbh->prepare("SELECT 1 FROM pg_extension WHERE extname = ?");
+    $sth->execute($extension_name);
+    my $ext_exists = $sth->fetchrow_array();
+    $sth->finish();
+    
+    if ($ext_exists) {
+        print "Extension '$extension_name' already exists.\n";
+        return;
+    }
+    
+    # Check if extension is available
+    $sth = $dbh->prepare("SELECT 1 FROM pg_available_extensions WHERE name = ?");
+    $sth->execute($extension_name);
+    my $ext_available = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($ext_available) {
+        die "Error: Extension '$extension_name' is not available.\n" .
+            "Please install the pg_kmersearch extension:\n" .
+            "  1. Install the extension package\n" .
+            "  2. Restart PostgreSQL service\n" .
+            "  3. Or ask your database administrator to install it\n";
+    }
+    
+    # Check if user has permission to create extensions
+    $sth = $dbh->prepare("SELECT usesuper FROM pg_user WHERE usename = CURRENT_USER");
+    $sth->execute();
+    my ($is_superuser) = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless ($is_superuser) {
+        die "Error: Current user does not have permission to create extensions.\n" .
+            "Please have a PostgreSQL superuser create the extension:\n" .
+            "  sudo -u postgres psql -d " . $dbh->{pg_db} . "\n" .
+            "  CREATE EXTENSION IF NOT EXISTS $extension_name;\n" .
+            "  \\q\n" .
+            "Or grant superuser permission temporarily:\n" .
+            "  sudo -u postgres psql\n" .
+            "  ALTER USER " . $dbh->{pg_user} . " SUPERUSER;\n" .
+            "  \\q\n" .
+            "  (Remember to revoke after use: ALTER USER " . $dbh->{pg_user} . " NOSUPERUSER;)\n";
+    }
+    
+    # Try to create the extension
+    eval {
+        $dbh->do("CREATE EXTENSION IF NOT EXISTS $extension_name");
+        print "Extension '$extension_name' created successfully.\n";
+    };
+    if ($@) {
+        die "Error: Failed to create extension '$extension_name': $@\n" .
+            "Please contact your database administrator.\n";
+    }
 }
 
 sub open_input_file {

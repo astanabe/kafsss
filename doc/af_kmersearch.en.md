@@ -9,8 +9,9 @@ The af_kmersearch suite provides a complete solution for DNA sequence analysis u
 ## Prerequisites
 
 - PostgreSQL 9.1 or later
-- pg_kmersearch extension installed
+- pg_kmersearch extension installed and available
 - Perl 5.10 or later
+- PostgreSQL user with appropriate permissions (see Setup section)
 
 ### Required Perl Modules
 
@@ -65,6 +66,49 @@ Core modules plus:
 - `Fcntl` - File control operations
 - `DBD::SQLite` - SQLite driver (for job management)
 - `Crypt::OpenSSL::Random` - Cryptographically secure random numbers
+
+### Database Setup
+
+Before using af_kmersearch tools, you must set up PostgreSQL properly:
+
+#### 1. Install PostgreSQL and pg_kmersearch extension
+```bash
+sudo apt-get install postgresql postgresql-contrib
+# Install pg_kmersearch extension package (contact your system administrator)
+```
+
+#### 2. Create PostgreSQL User and Database
+```bash
+sudo -u postgres psql
+CREATE USER yourusername CREATEDB;
+ALTER USER yourusername PASSWORD 'yourpassword';
+\q
+```
+
+#### 3. Set Environment Variables
+```bash
+export PGUSER=yourusername
+export PGPASSWORD=yourpassword
+export PGHOST=localhost
+export PGPORT=5432
+```
+
+#### 4. Create Extension in Database
+**Option A: Have superuser create extension (recommended)**
+```bash
+sudo -u postgres psql -d your_database
+CREATE EXTENSION IF NOT EXISTS pg_kmersearch;
+\q
+```
+
+**Option B: Grant temporary superuser permission**
+```bash
+sudo -u postgres psql
+ALTER USER yourusername SUPERUSER;
+\q
+# Run af_kmerstore, then revoke:
+# ALTER USER yourusername NOSUPERUSER;
+```
 
 ### Dependency Installation
 

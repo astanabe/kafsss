@@ -44,6 +44,38 @@ sudo make install PREFIX=/opt/af_kmersearch
 # They should be manually deployed to appropriate web server locations
 ```
 
+### Database Setup (Required)
+```bash
+# 1. Install PostgreSQL and pg_kmersearch extension
+sudo apt-get install postgresql postgresql-contrib
+# Install pg_kmersearch extension package (contact your system administrator)
+
+# 2. Create PostgreSQL user and database
+sudo -u postgres psql
+CREATE USER yourusername CREATEDB;
+ALTER USER yourusername PASSWORD 'yourpassword';
+\q
+
+# 3. Set environment variables
+export PGUSER=yourusername
+export PGPASSWORD=yourpassword
+export PGHOST=localhost
+export PGPORT=5432
+
+# 4. Create extension in target database (run once per database)
+# Option A: Have superuser create extension
+sudo -u postgres psql -d your_database
+CREATE EXTENSION IF NOT EXISTS pg_kmersearch;
+\q
+
+# Option B: Grant temporary superuser permission
+sudo -u postgres psql
+ALTER USER yourusername SUPERUSER;
+\q
+# Run af_kmerstore, then revoke:
+# ALTER USER yourusername NOSUPERUSER;
+```
+
 ### Dependency Management
 ```bash
 # Check all required Perl modules and external tools
@@ -63,7 +95,7 @@ cpanm DBI DBD::Pg DBD::SQLite JSON LWP::UserAgent HTTP::Request::Common \
 
 ### Testing the Tools
 ```bash
-# Basic workflow test
+# Basic workflow test (ensure database setup is complete first)
 af_kmerstore sampledata.fasta testdb
 af_kmerindex --mode=create testdb
 af_kmersearch --db=testdb sampledata.fasta results.tsv
@@ -111,6 +143,16 @@ grep -n "pg_kmersearch" *.pl
 - Compression: Database compression options (lz4, pglz, disable) in af_kmerstore
 - Input formats: FASTA, compressed files (.gz, .bz2, .xz, .zst), BLAST databases, wildcards
 - Sequence splitting: `--ovllen` must be less than half of `--minsplitlen` to prevent overlap conflicts
+- **Database Setup**: Users must have CREATEDB permission and pg_kmersearch extension must be available
+- **Extension Creation**: Either have superuser create the extension or grant temporary superuser permission
+
+## Troubleshooting
+
+### Common Error Messages
+- `PostgreSQL user 'username' does not exist`: Create user with `CREATE USER username CREATEDB;`
+- `User 'username' does not have CREATE DATABASE permission`: Grant with `ALTER USER username CREATEDB;`
+- `Extension 'pg_kmersearch' is not available`: Install pg_kmersearch extension package
+- `Current user does not have permission to create extensions`: Have superuser create extension or grant temporary superuser permission
 
 ## Important Notes
 
