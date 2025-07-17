@@ -186,7 +186,7 @@ $dsn = "DBI:Pg:dbname=$output_db;host=$host;port=$port";
 
 $dbh = DBI->connect($dsn, $username, $password, {
     RaiseError => 1,
-    AutoCommit => 0,
+    AutoCommit => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to database '$output_db': $DBI::errstr\n";
 
@@ -209,29 +209,36 @@ if (!$db_exists || $overwrite) {
 print "Processing FASTA files...\n";
 my $total_sequences = 0;
 
+# Disconnect main process before starting worker processes
+print "Disconnecting main process to allow worker processes to run...\n";
+$dbh->disconnect();
+
 eval {
-    $dbh->begin_work;
-    
     for my $i (0..$#input_files) {
         my $input_file = $input_files[$i];
         print "Processing file " . ($i + 1) . "/" . scalar(@input_files) . ": $input_file\n";
-        my $file_sequences = process_fasta_file($input_file, $dbh);
+        my $file_sequences = process_fasta_file($input_file, undef);
         $total_sequences += $file_sequences;
         print "  Processed $file_sequences sequences from this file.\n";
     }
     
-    $dbh->commit;
-    print "Transaction committed successfully for FASTA file processing.\n";
+    print "All worker processes completed successfully.\n";
 };
 
 if ($@) {
     print STDERR "Error during FASTA file processing: $@\n";
-    eval { $dbh->rollback; };
-    $dbh->disconnect();
     die "FASTA file processing failed: $@\n";
 }
 
 print "Total sequences processed: $total_sequences\n";
+
+# Reconnect main process for statistics update
+print "Reconnecting main process for statistics update...\n";
+$dbh = DBI->connect($dsn, $username, $password, {
+    RaiseError => 1,
+    AutoCommit => 1,
+    pg_enable_utf8 => 1
+}) or die "Cannot reconnect to database '$output_db': $DBI::errstr\n";
 
 # Update statistics in af_kmersearch_meta table
 print "Updating statistics in af_kmersearch_meta table...\n";
@@ -554,7 +561,7 @@ sub process_fasta_file {
     my $sequence_count = 0;
     
     # Process sequences with streaming batch processing
-    $sequence_count = process_streaming_with_batches($fh, $dbh);
+    $sequence_count = process_streaming_with_batches($fh);
     
     # Close file handle unless it's STDIN
     unless ($filename eq '-' || $filename eq 'stdin' || $filename eq 'STDIN') {
@@ -592,7 +599,7 @@ sub read_next_fasta_entry {
 }
 
 sub process_streaming_with_batches {
-    my ($fh, $dbh) = @_;
+    my ($fh) = @_;
     
     my $sequence_count = 0;
     my @fragment_batch = ();
@@ -677,7 +684,7 @@ sub start_child_process {
         
         my $child_dbh = DBI->connect($child_dsn, $username, $password, {
             RaiseError => 1,
-            AutoCommit => 0,
+            AutoCommit => 1,
             pg_enable_utf8 => 1
         }) or die "Cannot connect to database in child process: $DBI::errstr\n";
         
