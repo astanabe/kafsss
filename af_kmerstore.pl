@@ -397,7 +397,7 @@ sub validate_existing_database {
     
     # Check that seq column datatype matches
     $sth = $temp_dbh->prepare(<<SQL);
-SELECT data_type 
+SELECT CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
 FROM information_schema.columns 
 WHERE table_name = 'af_kmersearch' AND column_name = 'seq'
 SQL
@@ -436,7 +436,7 @@ sub check_meta_table_schema {
     my ($dbh) = @_;
     
     my $sth = $dbh->prepare(<<SQL);
-SELECT column_name, data_type 
+SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
 FROM information_schema.columns 
 WHERE table_name = 'af_kmersearch_meta' 
 ORDER BY column_name
@@ -480,7 +480,7 @@ sub check_main_table_schema {
     my ($dbh) = @_;
     
     my $sth = $dbh->prepare(<<SQL);
-SELECT column_name, data_type 
+SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
 FROM information_schema.columns 
 WHERE table_name = 'af_kmersearch' 
 ORDER BY column_name

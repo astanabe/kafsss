@@ -106,7 +106,8 @@ $sth->finish();
 my $seq_datatype = 'unknown';
 eval {
     my $datatype_sth = $dbh->prepare(<<SQL);
-SELECT data_type FROM information_schema.columns 
+SELECT CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
+FROM information_schema.columns 
 WHERE table_name = 'af_kmersearch' AND column_name = 'seq'
 SQL
     $datatype_sth->execute();

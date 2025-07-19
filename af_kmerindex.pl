@@ -242,7 +242,7 @@ SQL
     
     # Check if required columns exist with correct types
     $sth = $dbh->prepare(<<SQL);
-SELECT column_name, data_type
+SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
 FROM information_schema.columns 
 WHERE table_name = 'af_kmersearch'
 AND column_name IN ('seq', 'part', 'seqid')
@@ -277,14 +277,54 @@ sub create_indexes {
         validate_and_set_working_memory($dbh, $workingmemory);
     }
     
-    # Perform high-frequency k-mer analysis
-    perform_highfreq_analysis($dbh);
+    # Determine if high-frequency analysis should be performed
+    my $should_perform_highfreq_analysis = ($max_appearance_rate > 0 || $max_appearance_nrow > 0);
+    my $highfreq_kmer_count = 0;
+    my $cache_loaded = 0;
+    
+    if ($should_perform_highfreq_analysis) {
+        # Perform high-frequency k-mer analysis
+        perform_highfreq_analysis($dbh);
+        
+        # Check if any high-frequency k-mers were found
+        my $count_sth = $dbh->prepare("SELECT COUNT(*) FROM kmersearch_highfreq_kmer WHERE table_oid = 'af_kmersearch'::regclass AND column_name = 'seq'");
+        $count_sth->execute();
+        ($highfreq_kmer_count) = $count_sth->fetchrow_array();
+        $count_sth->finish();
+        
+        print "High-frequency k-mer analysis found $highfreq_kmer_count high-frequency k-mers.\n";
+        
+        if ($highfreq_kmer_count > 0) {
+            # Load cache before creating indexes
+            load_cache($dbh, $pg_version);
+            $cache_loaded = 1;
+            
+            # Enable high-frequency k-mer exclusion
+            eval {
+                $dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
+                print "Enabled high-frequency k-mer exclusion.\n";
+            };
+            if ($@) {
+                print "Warning: Failed to set kmersearch.preclude_highfreq_kmer: $@\n";
+            }
+            
+            # Enable parallel cache if PostgreSQL 18+
+            if ($pg_version >= 18) {
+                eval {
+                    $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
+                    print "Enabled parallel high-frequency k-mer cache.\n";
+                };
+                if ($@) {
+                    print "Warning: Failed to set kmersearch.force_use_parallel_highfreq_kmer_cache: $@\n";
+                }
+            }
+        }
+    } else {
+        print "High-frequency k-mer analysis disabled (max_appearance_rate=0 and max_appearance_nrow=0).\n";
+    }
     
     # Check if indexes already exist
     my $existing_indexes = get_existing_indexes($dbh);
-    
-    # Load cache before creating indexes
-    load_cache($dbh, $pg_version);
     
     # Create seq column GIN index
     my $seq_index_name = 'idx_af_kmersearch_seq_gin';
@@ -346,8 +386,10 @@ sub create_indexes {
         }
     }
     
-    # Free cache after creating indexes
-    free_cache($dbh, $pg_version);
+    # Free cache after creating indexes (only if cache was loaded)
+    if ($cache_loaded) {
+        free_cache($dbh, $pg_version);
+    }
     
     # Update af_kmersearch_meta table
     update_meta_table($dbh);
@@ -487,6 +529,7 @@ sub validate_tablespace_exists {
 sub get_postgresql_version {
     my ($dbh) = @_;
     
+    my $version;
     my $sth = $dbh->prepare("SELECT version()");
     eval {
         $sth->execute();
@@ -495,9 +538,9 @@ sub get_postgresql_version {
         
         # Extract major version number (e.g., "PostgreSQL 16.1" -> 16)
         if ($version_string =~ /PostgreSQL (\d+)\./) {
-            return $1;
+            $version = $1;
         } elsif ($version_string =~ /PostgreSQL (\d+)/) {
-            return $1;
+            $version = $1;
         } else {
             die "Could not parse PostgreSQL version: $version_string\n";
         }
@@ -506,6 +549,8 @@ sub get_postgresql_version {
     if ($@) {
         die "Failed to get PostgreSQL version: $@\n";
     }
+    
+    return $version;
 }
 
 sub set_guc_variables {
