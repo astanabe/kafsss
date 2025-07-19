@@ -13,7 +13,7 @@ The af_kmersearch suite is a comprehensive Perl-based toolkit for DNA sequence a
 - `af_kmerindex` - Create and manage k-mer search indexes 
 - `af_kmersearch` - Local sequence similarity search
 - `af_kmersearchclient` - Remote API client with job management
-- `af_kmerpart` - Database partitioning utilities
+- `af_kmerpart` - Database partition management utilities (add/remove partition labels)
 - `af_kmerdbinfo` - Database information and statistics
 - `calcsegment` - Sequence segmentation calculations (utility planned)
 
@@ -109,6 +109,11 @@ af_kmersearchclient --server="server1,server2,server3" --db=testdb sampledata.fa
 
 # Test server metadata endpoint
 curl http://localhost:8080/metadata
+
+# Test partition management
+af_kmerpart --partition=bacteria accessions.txt testdb
+af_kmerpart --mode=del --partition=bacteria accessions.txt testdb
+af_kmerpart --mode=del --partition=all all testdb
 ```
 
 ### Code Analysis

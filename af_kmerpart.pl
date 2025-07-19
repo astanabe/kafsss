@@ -26,6 +26,7 @@ my $username = $default_user;
 my $numthreads = $default_numthreads;
 my $batchsize = $default_batchsize;
 my @partitions = ();
+my $mode = 'add';
 my $help = 0;
 
 # Parse command line options
@@ -36,6 +37,7 @@ GetOptions(
     'numthreads=i' => \$numthreads,
     'batchsize=i' => \$batchsize,
     'partition=s' => \@partitions,
+    'mode=s' => \$mode,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
 
@@ -54,12 +56,15 @@ if (@ARGV != 2) {
 my ($input_file, $database_name) = @ARGV;
 
 # Validate input file
-unless ($input_file eq '-' || $input_file eq 'stdin' || $input_file eq 'STDIN') {
+unless ($input_file eq '-' || $input_file eq 'stdin' || $input_file eq 'STDIN' || $input_file eq 'all') {
     die "Input file '$input_file' does not exist\n" unless -f $input_file;
 }
 
 # Validate required options
 die "Partition name must be specified with --partition option\n" unless @partitions;
+
+# Validate mode option
+die "Mode must be 'add' or 'del'\n" unless $mode eq 'add' || $mode eq 'del';
 
 # Validate numthreads
 die "numthreads must be positive integer\n" unless $numthreads > 0;
@@ -77,7 +82,15 @@ for my $partition_spec (@partitions) {
 my %seen = ();
 @all_partitions = grep { !$seen{$_}++ } @all_partitions;
 
+# Validate partition names
+for my $partition (@all_partitions) {
+    if ($mode eq 'add' && $partition eq 'all') {
+        die "Partition name 'all' is not allowed in add mode\n";
+    }
+}
+
 print "af_kmerpart version $VERSION\n";
+print "Mode: $mode\n";
 print "Input file: $input_file\n";
 print "Database: $database_name\n";
 print "Host: $host\n";
@@ -131,19 +144,24 @@ if ($@) {
     die "Failed to acquire advisory lock: $@\n";
 }
 
-# Keep this connection open to maintain the lock during processing
-my $lock_dbh = $dbh;
+# Disconnect database connection before parallel processing to avoid connection sharing
+$dbh->disconnect();
+print "Database connection closed before parallel processing.\n";
 
 # Process accession numbers with memory-efficient streaming
-print "Processing accession numbers from input file...\n";
-process_accessions_batch_streaming($input_file);
+if ($input_file eq 'all') {
+    print "Processing all rows in database...\n";
+    process_all_rows();
+} else {
+    print "Processing accession numbers from input file...\n";
+    process_accessions_batch_streaming($input_file);
+}
 
 # Update statistics in af_kmersearch_meta table
 print "Updating statistics in af_kmersearch_meta table...\n";
 update_meta_statistics($database_name);
 
-# Release advisory lock
-$lock_dbh->disconnect();
+# Advisory lock is automatically released when the original connection was closed
 print "Exclusive lock released.\n";
 
 print "Processing completed successfully.\n";
@@ -163,13 +181,16 @@ Usage: af_kmerpart [options] input_file database_name
 Update partition information in af_kmersearch database for specified accession numbers.
 
 Required arguments:
-  input_file        Input file with accession numbers (one per line) (use '-', 'stdin', or 'STDIN' for standard input)
+  input_file        Input file with accession numbers (one per line), or 'all' for all rows
+                    (use '-', 'stdin', or 'STDIN' for standard input)
   database_name     PostgreSQL database name
 
 Required options:
-  --partition=NAME  Partition name to add (can be specified multiple times or comma-separated)
+  --partition=NAME  Partition name to add/remove (can be specified multiple times or comma-separated)
+                    Use 'all' to target all partitions (only in del mode)
 
 Other options:
+  --mode=MODE       Operation mode: 'add' (default) or 'del'
   --host=HOST       PostgreSQL server host (default: \$PGHOST or localhost)
   --port=PORT       PostgreSQL server port (default: \$PGPORT or 5432)
   --username=USER   PostgreSQL username (default: \$PGUSER or current user)
@@ -184,10 +205,17 @@ Environment variables:
   PGPASSWORD       PostgreSQL password
 
 Examples:
+  # Add partitions
   af_kmerpart --partition=bacteria accessions.txt mydb
   af_kmerpart --partition=bacteria,archaea accessions.txt mydb
-  af_kmerpart --partition=bacteria --partition=archaea accessions.txt mydb
   af_kmerpart --numthreads=4 --partition=viruses accessions.txt mydb
+  
+  # Remove partitions
+  af_kmerpart --mode=del --partition=bacteria accessions.txt mydb
+  af_kmerpart --mode=del --partition=archaea all mydb
+  af_kmerpart --mode=del --partition=all all mydb
+  
+  # Standard input
   echo -e "AB123456\nCD789012" | af_kmerpart --partition=bacteria stdin mydb
 
 EOF
@@ -298,7 +326,7 @@ sub process_batch_items {
                 
     my $child_dbh = DBI->connect($child_dsn, $username, $password, {
         RaiseError => 1,
-        AutoCommit => 0,
+        AutoCommit => 1,
         pg_enable_utf8 => 1
     }) or die "Cannot connect to database in child process: $DBI::errstr\n";
     
@@ -453,7 +481,7 @@ SQL
     
     # Check if required columns exist with correct types
     $sth = $dbh->prepare(<<SQL);
-SELECT column_name, data_type
+SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
 FROM information_schema.columns 
 WHERE table_name = 'af_kmersearch'
 AND column_name IN ('seq', 'part', 'seqid')
@@ -532,7 +560,7 @@ sub process_accessions_single_threaded {
         
     my $dbh = DBI->connect($dsn, $username, $password, {
         RaiseError => 1,
-        AutoCommit => 0,
+        AutoCommit => 1,
         pg_enable_utf8 => 1
     }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
     
@@ -562,8 +590,9 @@ sub process_single_accession {
     # Remove version number from accession
     my $clean_accession = remove_version_number($accession);
     
-    # Optimized single UPDATE query that finds and updates matching rows in one operation
-    my $update_sth = $dbh->prepare(<<SQL);
+    if ($mode eq 'add') {
+        # Add partitions: combine existing partitions with new ones
+        my $update_sth = $dbh->prepare(<<SQL);
 UPDATE af_kmersearch 
 SET part = (
     SELECT array_agg(DISTINCT e) 
@@ -575,22 +604,86 @@ WHERE EXISTS (
     WHERE split_part(s, ':', 1) = ?
 )
 SQL
-    
-    eval {
-        my $rows_updated = $update_sth->execute(\@all_partitions, $clean_accession);
         
-        if ($rows_updated && $rows_updated > 0) {
-            print "Updated $rows_updated rows for accession '$accession' (cleaned: '$clean_accession')\n";
-        } else {
-            print "No rows found for accession '$accession' (cleaned: '$clean_accession')\n";
+        eval {
+            my $rows_updated = $update_sth->execute(\@all_partitions, $clean_accession);
+            
+            if ($rows_updated && $rows_updated > 0) {
+                print "Added partitions to $rows_updated rows for accession '$accession' (cleaned: '$clean_accession')\n";
+            } else {
+                print "No rows found for accession '$accession' (cleaned: '$clean_accession')\n";
+            }
+        };
+        
+        if ($@) {
+            print STDERR "Error processing accession '$accession': $@\n";
         }
-    };
-    
-    if ($@) {
-        print STDERR "Error processing accession '$accession': $@\n";
+        
+        $update_sth->finish();
+        
+    } elsif ($mode eq 'del') {
+        # Remove partitions
+        if (grep { $_ eq 'all' } @all_partitions) {
+            # Remove all partitions (set part to empty array)
+            my $update_sth = $dbh->prepare(<<SQL);
+UPDATE af_kmersearch 
+SET part = '{}'::text[]
+WHERE EXISTS (
+    SELECT 1 
+    FROM unnest(seqid) AS s 
+    WHERE split_part(s, ':', 1) = ?
+)
+SQL
+            
+            eval {
+                my $rows_updated = $update_sth->execute($clean_accession);
+                
+                if ($rows_updated && $rows_updated > 0) {
+                    print "Removed all partitions from $rows_updated rows for accession '$accession' (cleaned: '$clean_accession')\n";
+                } else {
+                    print "No rows found for accession '$accession' (cleaned: '$clean_accession')\n";
+                }
+            };
+            
+            if ($@) {
+                print STDERR "Error processing accession '$accession': $@\n";
+            }
+            
+            $update_sth->finish();
+            
+        } else {
+            # Remove specific partitions
+            my $update_sth = $dbh->prepare(<<SQL);
+UPDATE af_kmersearch 
+SET part = (
+    SELECT array_agg(e) 
+    FROM unnest(part) AS e 
+    WHERE e != ALL(?)
+) 
+WHERE EXISTS (
+    SELECT 1 
+    FROM unnest(seqid) AS s 
+    WHERE split_part(s, ':', 1) = ?
+)
+SQL
+            
+            eval {
+                my $rows_updated = $update_sth->execute(\@all_partitions, $clean_accession);
+                
+                if ($rows_updated && $rows_updated > 0) {
+                    print "Removed specified partitions from $rows_updated rows for accession '$accession' (cleaned: '$clean_accession')\n";
+                } else {
+                    print "No rows found for accession '$accession' (cleaned: '$clean_accession')\n";
+                }
+            };
+            
+            if ($@) {
+                print STDERR "Error processing accession '$accession': $@\n";
+            }
+            
+            $update_sth->finish();
+        }
     }
-    
-    $update_sth->finish();
 }
 
 sub remove_version_number {
@@ -602,24 +695,192 @@ sub remove_version_number {
     return $accession;
 }
 
+sub process_all_rows {
+    # Process all rows in the database using batch processing with threading
+    # Note: This function assumes database connection was already closed before parallel processing
+    
+    # Create temporary connection to get total row count
+    my $password = $ENV{PGPASSWORD} || '';
+    my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
+    
+    my $temp_dbh = DBI->connect($dsn, $username, $password, {
+        RaiseError => 1,
+        AutoCommit => 1,
+        pg_enable_utf8 => 1
+    }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
+    
+    # Get total number of rows for progress tracking
+    my $sth = $temp_dbh->prepare("SELECT COUNT(*) FROM af_kmersearch");
+    $sth->execute();
+    my ($total_rows) = $sth->fetchrow_array();
+    $sth->finish();
+    
+    print "Total rows to process: $total_rows\n";
+    
+    # Close temporary connection before starting parallel processing
+    $temp_dbh->disconnect();
+    print "Temporary database connection closed before batch processing.\n";
+    
+    # Process all rows in batches
+    my $offset = 0;
+    my $total_processed = 0;
+    my @active_children = ();
+    
+    while ($offset < $total_rows) {
+        # Wait for available slot if we have reached max threads
+        while (scalar(@active_children) >= $numthreads) {
+            wait_for_child(\@active_children);
+        }
+        
+        # Process this batch
+        my $pid = process_all_rows_batch($offset, $batchsize);
+        if ($pid > 0) {
+            push @active_children, $pid;
+        }
+        
+        my $batch_size = ($offset + $batchsize <= $total_rows) ? $batchsize : ($total_rows - $offset);
+        $total_processed += $batch_size;
+        $offset += $batchsize;
+        
+        print "Processed batch: $batch_size items (total: $total_processed/$total_rows)\n";
+    }
+    
+    # Wait for all remaining children to complete
+    while (@active_children) {
+        wait_for_child(\@active_children);
+    }
+    
+    print "Total rows processed: $total_processed\n";
+}
+
+sub process_all_rows_batch {
+    my ($offset, $limit) = @_;
+    
+    if ($numthreads == 1) {
+        # Single-threaded: process directly in current process
+        process_all_rows_batch_items($offset, $limit);
+        return 0;  # No child process created
+    } else {
+        # Multi-threaded: fork a child process
+        my $pid = fork();
+        
+        if (!defined $pid) {
+            die "Cannot fork: $!\n";
+        } elsif ($pid == 0) {
+            # Child process
+            process_all_rows_batch_items($offset, $limit);
+            exit 0;
+        } else {
+            # Parent process
+            return $pid;
+        }
+    }
+}
+
+sub process_all_rows_batch_items {
+    my ($offset, $limit) = @_;
+    
+    # Create new database connection for child process
+    my $password = $ENV{PGPASSWORD} || '';
+    my $child_dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
+                
+    my $child_dbh = DBI->connect($child_dsn, $username, $password, {
+        RaiseError => 1,
+        AutoCommit => 1,
+        pg_enable_utf8 => 1
+    }) or die "Cannot connect to database in child process: $DBI::errstr\n";
+    
+    eval {
+        $child_dbh->begin_work;
+        
+        if ($mode eq 'add') {
+            # Add partitions to all rows
+            my $update_sth = $child_dbh->prepare(<<SQL);
+UPDATE af_kmersearch 
+SET part = (
+    SELECT array_agg(DISTINCT e) 
+    FROM unnest(part || ?) AS e
+)
+WHERE ctid IN (
+    SELECT ctid FROM af_kmersearch 
+    ORDER BY ctid 
+    LIMIT ? OFFSET ?
+)
+SQL
+            
+            my $rows_updated = $update_sth->execute(\@all_partitions, $limit, $offset);
+            print "Added partitions to $rows_updated rows in batch (offset: $offset)\n";
+            $update_sth->finish();
+            
+        } elsif ($mode eq 'del') {
+            if (grep { $_ eq 'all' } @all_partitions) {
+                # Remove all partitions from all rows
+                my $update_sth = $child_dbh->prepare(<<SQL);
+UPDATE af_kmersearch 
+SET part = '{}'::text[]
+WHERE ctid IN (
+    SELECT ctid FROM af_kmersearch 
+    ORDER BY ctid 
+    LIMIT ? OFFSET ?
+)
+SQL
+                
+                my $rows_updated = $update_sth->execute($limit, $offset);
+                print "Removed all partitions from $rows_updated rows in batch (offset: $offset)\n";
+                $update_sth->finish();
+                
+            } else {
+                # Remove specific partitions from all rows
+                my $update_sth = $child_dbh->prepare(<<SQL);
+UPDATE af_kmersearch 
+SET part = (
+    SELECT array_agg(e) 
+    FROM unnest(part) AS e 
+    WHERE e != ALL(?)
+)
+WHERE ctid IN (
+    SELECT ctid FROM af_kmersearch 
+    ORDER BY ctid 
+    LIMIT ? OFFSET ?
+)
+SQL
+                
+                my $rows_updated = $update_sth->execute(\@all_partitions, $limit, $offset);
+                print "Removed specified partitions from $rows_updated rows in batch (offset: $offset)\n";
+                $update_sth->finish();
+            }
+        }
+        
+        $child_dbh->commit;
+        print "Batch committed successfully (offset: $offset, limit: $limit)\n";
+    };
+    
+    if ($@) {
+        eval { $child_dbh->rollback; };
+        die "Error processing all rows batch: $@\n";
+    }
+    
+    $child_dbh->disconnect;
+}
+
 
 sub update_meta_statistics {
     my ($database_name) = @_;
     
-    # Connect to database
+    # Parent process reconnects to database after parallel processing is complete
     my $password = $ENV{PGPASSWORD} || '';
     my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
         
     my $dbh = DBI->connect($dsn, $username, $password, {
         RaiseError => 1,
-        AutoCommit => 0,
+        AutoCommit => 1,
         pg_enable_utf8 => 1
     }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
     
     print "Calculating total sequence statistics...\n";
     
     # Get datatype from existing meta table to determine bit calculation
-    my $sth = $dbh->prepare("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'af_kmersearch' AND column_name = 'seq'");
+    my $sth = $dbh->prepare("SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type FROM information_schema.columns WHERE table_name = 'af_kmersearch' AND column_name = 'seq'");
     $sth->execute();
     my ($col_name, $datatype) = $sth->fetchrow_array();
     $sth->finish();

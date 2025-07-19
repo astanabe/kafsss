@@ -294,7 +294,7 @@ perl -MStarman -e 'print "Starman available\n"'
 | Script | Purpose |
 |--------|---------|
 | `af_kmerstore` | Store FASTA sequences into PostgreSQL database |
-| `af_kmerpart` | Update partition information for sequences |
+| `af_kmerpart` | Add/remove partition information for sequences |
 | `af_kmerindex` | Create/drop GIN indexes on sequence data |
 | `af_kmersearch` | Search sequences using k-mer similarity |
 | `af_kmerdbinfo` | Display database metadata information |
@@ -380,7 +380,7 @@ af_kmerstore --datatype=DNA2 --minlen=100000 sequences.fasta mydb
 
 ### af_kmerpart
 
-Update partition information for sequences based on accession numbers.
+Add or remove partition information for sequences based on accession numbers or apply operations to all rows.
 
 #### Usage
 ```bash
@@ -388,25 +388,40 @@ af_kmerpart [options] input_file database_name
 ```
 
 #### Options
-- `--partition=NAME` - Partition name to add (required, multiple values allowed)
+- `--mode=MODE` - Operation mode: `add` (default) or `del`
+- `--partition=NAME` - Partition name to add/remove (required, multiple values allowed)
+  - Use `all` to target all partitions (only in del mode)
 - `--numthreads=INT` - Number of parallel threads (default: 1)
 
 #### Input File
 - Plain text file with one accession number per line
 - Use `-`, `stdin`, or `STDIN` for standard input
+- Use `all` to target all rows in the database
 - Lines starting with `#` are treated as comments
 
 #### Examples
 ```bash
-# Add partition to sequences
+# Add partitions to sequences
 af_kmerpart --partition=bacteria accessions.txt mydb
-
-# Multiple partitions
 af_kmerpart --partition=bacteria,archaea accessions.txt mydb
+
+# Remove partitions from sequences
+af_kmerpart --mode=del --partition=bacteria accessions.txt mydb
+
+# Remove all partitions from all rows
+af_kmerpart --mode=del --partition=all all mydb
+
+# Remove specific partition from all rows
+af_kmerpart --mode=del --partition=archaea all mydb
 
 # From standard input
 echo -e "AB123456\nCD789012" | af_kmerpart --partition=bacteria stdin mydb
 ```
+
+#### Notes
+- Partition name `all` is prohibited in add mode
+- When input file is `all`, operations target all rows in the database
+- When `--partition=all` is used in del mode, all partition information is removed
 
 ### af_kmerindex
 

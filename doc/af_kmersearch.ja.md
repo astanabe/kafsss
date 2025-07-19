@@ -294,7 +294,7 @@ perl -MStarman -e 'print "Starman available\n"'
 | スクリプト | 用途 |
 |-----------|------|
 | `af_kmerstore` | FASTA配列をPostgreSQLデータベースに格納 |
-| `af_kmerpart` | 配列のパーティション情報を更新 |
+| `af_kmerpart` | 配列のパーティション情報を追加・削除 |
 | `af_kmerindex` | 配列データのGINインデックスを作成/削除 |
 | `af_kmersearch` | k-mer類似性を使用した配列検索 |
 | `af_kmerdbinfo` | データベースメタデータ情報を表示 |
@@ -380,7 +380,7 @@ af_kmerstore --datatype=DNA2 --minlen=100000 sequences.fasta mydb
 
 ### af_kmerpart
 
-アクセッション番号に基づいて配列のパーティション情報を更新します。
+アクセッション番号に基づく配列またはデータベース全体に対してパーティション情報の追加・削除を行います。
 
 #### 使用方法
 ```bash
@@ -388,25 +388,40 @@ af_kmerpart [オプション] 入力ファイル名 データベース名
 ```
 
 #### オプション
-- `--partition=NAME` - 追加するパーティション名（必須、複数指定可能）
+- `--mode=MODE` - 動作モード: `add`（デフォルト）または `del`
+- `--partition=NAME` - 追加/削除するパーティション名（必須、複数指定可能）
+  - delモード時のみ `all` を指定して全パーティションを対象にできます
 - `--numthreads=INT` - 並列スレッド数（デフォルト: 1）
 
 #### 入力ファイル
 - 1行に1つのアクセッション番号を記載したプレーンテキストファイル
 - 標準入力の場合は `-`、`stdin`、または `STDIN` を使用
+- データベースの全行を対象にする場合は `all` を使用
 - `#`で始まる行はコメントとして扱われます
 
 #### 使用例
 ```bash
 # 配列にパーティションを追加
 af_kmerpart --partition=bacteria accessions.txt mydb
-
-# 複数のパーティション
 af_kmerpart --partition=bacteria,archaea accessions.txt mydb
+
+# 配列からパーティションを削除
+af_kmerpart --mode=del --partition=bacteria accessions.txt mydb
+
+# 全行から全パーティションを削除
+af_kmerpart --mode=del --partition=all all mydb
+
+# 全行から特定パーティションを削除
+af_kmerpart --mode=del --partition=archaea all mydb
 
 # 標準入力から
 echo -e "AB123456\nCD789012" | af_kmerpart --partition=bacteria stdin mydb
 ```
+
+#### 注意事項
+- addモード時にパーティション名 `all` の使用は禁止されています
+- 入力ファイル名に `all` を指定すると、データベースの全行が対象になります
+- `--partition=all` をdelモード時に使用すると、全パーティション情報が削除されます
 
 ### af_kmerindex
 
