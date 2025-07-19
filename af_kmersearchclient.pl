@@ -1317,17 +1317,20 @@ sub read_next_fasta_entry {
     my $line = <$fh>;
     return undef unless defined $line;
     
+    # Remove trailing '>' if present (from record separator)
+    $line =~ s/>$//;
+    
     # Parse the FASTA record using regex that handles optional leading '>'
     # and captures label (up to first newline) and sequence (rest, may contain newlines)
     if ($line =~ /^>?\s*(\S[^\r\n]*)\r?\n(.*)/s) {
         my $label = $1;
-        my $sequence = $2;
+        my $sequence = uc($2);
         
         # Replace tab characters in label with 4 spaces to prevent TSV format corruption
         $label =~ s/\t/    /g;
         
-        # Remove all whitespace (including newlines) from sequence
-        $sequence =~ s/\s+//gs;
+        # Remove non-alphabetic characters from sequence (keeps only A-Z)
+        $sequence =~ s/[^A-Z]//sg;
         
         return {
             label => $label,

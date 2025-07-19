@@ -1158,10 +1158,12 @@ sub validate_query_sequence {
     my ($sequence, $ovllen, $kmer_size) = @_;
     
     # Check for invalid characters (allow all degenerate nucleotide codes)
-    if ($sequence =~ /[^ACGTUMRWSYKVHDBN]/i) {
+    my @invalid_char = $sequence =~ /[^ACGTUMRWSYKVHDBN]/ig;
+    if (@invalid_char) {
+        my $invalid_chars_str = join('', @invalid_char);
         return {
             valid => 0,
-            reason => "Query sequence contains invalid characters (only A, C, G, T, U, M, R, W, S, Y, K, V, H, D, B, N are allowed)"
+            reason => "Query sequence contains invalid characters '$invalid_chars_str' (only A, C, G, T, U, M, R, W, S, Y, K, V, H, D, B, N are allowed)"
         };
     }
     

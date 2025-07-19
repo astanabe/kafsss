@@ -143,18 +143,52 @@ validate_database_schema($dbh);
 # Verify database structure
 verify_database_structure($dbh);
 
-# Get k-mer size from af_kmersearch_meta table
-my $kmer_size = get_kmer_size_from_meta($dbh);
-print "Retrieved k-mer size: $kmer_size\n";
+# Get all metadata from af_kmersearch_meta table
+my $metadata = get_metadata_from_meta($dbh);
+print "Retrieved metadata - k-mer size: $metadata->{kmer_size}, ovllen: $metadata->{ovllen}\n";
 
 # Set k-mer size for pg_kmersearch
-print "Setting k-mer size to $kmer_size...\n";
+print "Setting k-mer size to $metadata->{kmer_size}...\n";
 eval {
-    $dbh->do("SET kmersearch.kmer_size = $kmer_size");
-    print "K-mer size set to $kmer_size successfully.\n";
+    $dbh->do("SET kmersearch.kmer_size = $metadata->{kmer_size}");
+    print "K-mer size set to $metadata->{kmer_size} successfully.\n";
 };
 if ($@) {
     die "Failed to set k-mer size: $@\n";
+}
+
+# Set additional kmersearch parameters if available
+if (defined $metadata->{occur_bitlen}) {
+    print "Setting occur_bitlen to $metadata->{occur_bitlen}...\n";
+    eval {
+        $dbh->do("SET kmersearch.occur_bitlen = $metadata->{occur_bitlen}");
+        print "Occur_bitlen set to $metadata->{occur_bitlen} successfully.\n";
+    };
+    if ($@) {
+        warn "Warning: Failed to set occur_bitlen: $@\n";
+    }
+}
+
+if (defined $metadata->{max_appearance_rate}) {
+    print "Setting max_appearance_rate to $metadata->{max_appearance_rate}...\n";
+    eval {
+        $dbh->do("SET kmersearch.max_appearance_rate = $metadata->{max_appearance_rate}");
+        print "Max_appearance_rate set to $metadata->{max_appearance_rate} successfully.\n";
+    };
+    if ($@) {
+        warn "Warning: Failed to set max_appearance_rate: $@\n";
+    }
+}
+
+if (defined $metadata->{max_appearance_nrow}) {
+    print "Setting max_appearance_nrow to $metadata->{max_appearance_nrow}...\n";
+    eval {
+        $dbh->do("SET kmersearch.max_appearance_nrow = $metadata->{max_appearance_nrow}");
+        print "Max_appearance_nrow set to $metadata->{max_appearance_nrow} successfully.\n";
+    };
+    if ($@) {
+        warn "Warning: Failed to set max_appearance_nrow: $@\n";
+    }
 }
 
 # Set minimum score if specified
@@ -190,9 +224,12 @@ if ($@) {
     die "Failed to set rawscore cache max entries: $@\n";
 }
 
-# Get ovllen from af_kmersearch_meta table for query validation
-my $ovllen = get_ovllen_from_meta($dbh);
-print "Retrieved ovllen value: $ovllen\n";
+# Parent process disconnects from database after metadata retrieval (child processes will reconnect)
+if ($numthreads > 1) {
+    $dbh->disconnect();
+    print "Parent process disconnected from database.\n";
+    $dbh = undef;  # Clear the handle to prevent accidental use
+}
 
 # Open output file
 my $output_fh = open_output_file($output_file);
@@ -212,10 +249,10 @@ for my $i (0..$#input_files) {
     my $file_results;
     if ($numthreads == 1) {
         # Single-threaded processing
-        $file_results = process_sequences_single_threaded($input_fh, $output_fh, $dbh, $total_queries);
+        $file_results = process_sequences_single_threaded($input_fh, $output_fh, $dbh, $total_queries, $metadata);
     } else {
         # Multi-threaded processing with process pool
-        $file_results = process_sequences_parallel_streaming($input_fh, $output_fh, $total_queries);
+        $file_results = process_sequences_parallel_streaming($input_fh, $output_fh, $total_queries, $metadata);
     }
     
     $total_results += $file_results->{results};
@@ -228,7 +265,9 @@ for my $i (0..$#input_files) {
 
 # Close files and database connection
 close_output_file($output_fh, $output_file);
-$dbh->disconnect();
+if (defined $dbh) {
+    $dbh->disconnect();
+}
 
 print "Processing completed successfully.\n";
 print "Total queries processed: $total_queries\n";
@@ -426,17 +465,20 @@ sub read_next_fasta_entry {
     my $line = <$fh>;
     return undef unless defined $line;
     
+    # Remove trailing '>' if present (from record separator)
+    $line =~ s/>$//;
+    
     # Parse the FASTA record using regex that handles optional leading '>'
     # and captures label (up to first newline) and sequence (rest, may contain newlines)
     if ($line =~ /^>?\s*(\S[^\r\n]*)\r?\n(.*)/s) {
         my $label = $1;
-        my $sequence = $2;
+        my $sequence = uc($2);
         
         # Replace tab characters in label with 4 spaces to prevent TSV format corruption
         $label =~ s/\t/    /g;
         
-        # Remove all whitespace (including newlines) from sequence
-        $sequence =~ s/\s+//gs;
+        # Remove non-alphabetic characters from sequence (keeps only A-Z)
+        $sequence =~ s/[^A-Z]//sg;
         
         return {
             label => $label,
@@ -448,7 +490,7 @@ sub read_next_fasta_entry {
 }
 
 sub process_sequences_single_threaded {
-    my ($input_fh, $output_fh, $dbh, $query_offset) = @_;
+    my ($input_fh, $output_fh, $dbh, $query_offset, $metadata) = @_;
     $query_offset ||= 0;
     
     my $total_results = 0;
@@ -457,7 +499,7 @@ sub process_sequences_single_threaded {
     while (my $fasta_entry = read_next_fasta_entry($input_fh)) {
         $query_count++;
         my $global_query_number = $query_offset + $query_count;
-        my $results = search_sequence_with_validation($fasta_entry, $dbh, $global_query_number, $ovllen, $mode, $kmer_size);
+        my $results = search_sequence_with_validation($fasta_entry, $dbh, $global_query_number, $metadata->{ovllen}, $mode, $metadata->{kmer_size});
         
         if (@$results > 0) {
             for my $result (@$results) {
@@ -476,7 +518,7 @@ sub process_sequences_single_threaded {
 }
 
 sub process_sequences_parallel_streaming {
-    my ($input_fh, $output_fh, $query_offset) = @_;
+    my ($input_fh, $output_fh, $query_offset, $metadata) = @_;
     $query_offset ||= 0;
     
     my %active_children = ();  # pid => {query_number, temp_file}
@@ -505,7 +547,7 @@ sub process_sequences_parallel_streaming {
                 die "Cannot fork: $!\n";
             } elsif ($pid == 0) {
                 # Child process
-                process_single_sequence($fasta_entry, $global_query_number, $temp_file);
+                process_single_sequence($fasta_entry, $global_query_number, $temp_file, $metadata);
                 exit 0;
             } else {
                 # Parent process
@@ -644,7 +686,7 @@ sub process_sequences_parallel_streaming {
 }
 
 sub process_single_sequence {
-    my ($fasta_entry, $query_number, $temp_file) = @_;
+    my ($fasta_entry, $query_number, $temp_file, $metadata) = @_;
     
     # Create new database connection for child process
     my $password = $ENV{PGPASSWORD} || '';
@@ -656,15 +698,40 @@ sub process_single_sequence {
         pg_enable_utf8 => 1
     }) or die "Cannot connect to database in child process: $DBI::errstr\n";
     
-    # Get k-mer size from af_kmersearch_meta table
-    my $child_kmer_size = get_kmer_size_from_meta($child_dbh);
-    
-    # Set k-mer size for pg_kmersearch
+    # Set k-mer size for pg_kmersearch (using metadata from parent)
     eval {
-        $child_dbh->do("SET kmersearch.kmer_size = $child_kmer_size");
+        $child_dbh->do("SET kmersearch.kmer_size = $metadata->{kmer_size}");
     };
     if ($@) {
         die "Failed to set k-mer size in child process: $@\n";
+    }
+    
+    # Set additional kmersearch parameters if available (using metadata from parent)
+    if (defined $metadata->{occur_bitlen}) {
+        eval {
+            $child_dbh->do("SET kmersearch.occur_bitlen = $metadata->{occur_bitlen}");
+        };
+        if ($@) {
+            warn "Warning: Failed to set occur_bitlen in child process: $@\n";
+        }
+    }
+    
+    if (defined $metadata->{max_appearance_rate}) {
+        eval {
+            $child_dbh->do("SET kmersearch.max_appearance_rate = $metadata->{max_appearance_rate}");
+        };
+        if ($@) {
+            warn "Warning: Failed to set max_appearance_rate in child process: $@\n";
+        }
+    }
+    
+    if (defined $metadata->{max_appearance_nrow}) {
+        eval {
+            $child_dbh->do("SET kmersearch.max_appearance_nrow = $metadata->{max_appearance_nrow}");
+        };
+        if ($@) {
+            warn "Warning: Failed to set max_appearance_nrow in child process: $@\n";
+        }
     }
     
     # Set minimum score if specified
@@ -694,11 +761,8 @@ sub process_single_sequence {
         die "Failed to set rawscore cache max entries in child process: $@\n";
     }
     
-    # Get ovllen for validation
-    my $child_ovllen = get_ovllen_from_meta($child_dbh);
-    
-    # Search sequence
-    my $results = search_sequence_with_validation($fasta_entry, $child_dbh, $query_number, $child_ovllen, $mode, $child_kmer_size);
+    # Search sequence (using metadata from parent, no need to retrieve again)
+    my $results = search_sequence_with_validation($fasta_entry, $child_dbh, $query_number, $metadata->{ovllen}, $mode, $metadata->{kmer_size});
     
     # Check for no matches and report to STDERR
     if (@$results == 0) {
@@ -818,6 +882,17 @@ sub extract_seqid_string {
     
     return '' unless defined $seqid_array;
     
+    # Check if already a Perl array reference (DBD::Pg automatic conversion)
+    if (ref($seqid_array) eq 'ARRAY') {
+        # Remove quotes and spaces from each seqid
+        my @clean_seqids = ();
+        for my $seqid (@$seqid_array) {
+            $seqid =~ s/["'\s]//g;  # Remove double quotes, single quotes, and spaces
+            push @clean_seqids, $seqid;
+        }
+        return join(',', @clean_seqids);
+    }
+    
     # Parse PostgreSQL array format {"elem1","elem2",...}
     my @seqids = parse_pg_array($seqid_array);
     
@@ -892,14 +967,40 @@ sub parse_pg_array {
     return @elements;
 }
 
+sub get_metadata_from_meta {
+    my ($dbh) = @_;
+    
+    my $sth = $dbh->prepare(<<SQL);
+SELECT ovllen, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
+FROM af_kmersearch_meta LIMIT 1
+SQL
+    
+    $sth->execute();
+    my ($ovllen, $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow) = $sth->fetchrow_array();
+    $sth->finish();
+    
+    if (!defined $ovllen || !defined $kmer_size) {
+        die "No metadata found in af_kmersearch_meta table. Please run af_kmerindex to create indexes first.\n";
+    }
+    
+    return {
+        ovllen => $ovllen,
+        kmer_size => $kmer_size,
+        occur_bitlen => $occur_bitlen,
+        max_appearance_rate => $max_appearance_rate,
+        max_appearance_nrow => $max_appearance_nrow
+    };
+}
+
 sub get_ovllen_from_meta {
     my ($dbh) = @_;
     
     # Query af_kmersearch_meta table to get ovllen value
     my $sth = $dbh->prepare("SELECT ovllen FROM af_kmersearch_meta LIMIT 1");
+    my $ovllen;
     eval {
         $sth->execute();
-        my ($ovllen) = $sth->fetchrow_array();
+        ($ovllen) = $sth->fetchrow_array();
         $sth->finish();
         
         if (defined $ovllen) {
@@ -912,6 +1013,8 @@ sub get_ovllen_from_meta {
     if ($@) {
         die "Failed to retrieve ovllen from af_kmersearch_meta table: $@\n";
     }
+    
+    return $ovllen;
 }
 
 sub get_kmer_size_from_meta {
@@ -919,9 +1022,10 @@ sub get_kmer_size_from_meta {
     
     # Query af_kmersearch_meta table to get kmer_size value
     my $sth = $dbh->prepare("SELECT kmer_size FROM af_kmersearch_meta LIMIT 1");
+    my $kmer_size;
     eval {
         $sth->execute();
-        my ($kmer_size) = $sth->fetchrow_array();
+        ($kmer_size) = $sth->fetchrow_array();
         $sth->finish();
         
         if (defined $kmer_size) {
@@ -934,16 +1038,20 @@ sub get_kmer_size_from_meta {
     if ($@) {
         die "Failed to retrieve kmer_size from af_kmersearch_meta table: $@\n";
     }
+    
+    return $kmer_size;
 }
 
 sub validate_query_sequence {
     my ($sequence, $ovllen, $kmer_size) = @_;
     
     # Check for invalid characters (allow all degenerate nucleotide codes)
-    if ($sequence =~ /[^ACGTUMRWSYKVHDBN]/i) {
+    my @invalid_char = $sequence =~ /[^ACGTUMRWSYKVHDBN]/ig;
+    if (@invalid_char) {
+        my $invalid_chars_str = join('', @invalid_char);
         return {
             valid => 0,
-            reason => "Query sequence contains invalid characters (only A, C, G, T, U, M, R, W, S, Y, K, V, H, D, B, N are allowed)"
+            reason => "Query sequence contains invalid characters '$invalid_chars_str' (only A, C, G, T, U, M, R, W, S, Y, K, V, H, D, B, N are allowed)"
         };
     }
     
