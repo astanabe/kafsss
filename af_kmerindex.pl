@@ -31,7 +31,10 @@ my $max_appearance_rate = $default_max_appearance_rate;
 my $max_appearance_nrow = $default_max_appearance_nrow;
 my $occur_bitlen = $default_occur_bitlen;
 my $numthreads = 0;
-my $workingmemory = '';
+my $workingmemory = '8GB';
+my $maintenanceworkingmemory = '8GB';
+my $temporarybuffer = '512MB';
+my $verbose = 0;
 my $help = 0;
 
 # Parse command line options
@@ -47,6 +50,9 @@ GetOptions(
     'occur_bitlen=i' => \$occur_bitlen,
     'numthreads=i' => \$numthreads,
     'workingmemory=s' => \$workingmemory,
+    'maintenanceworkingmemory=s' => \$maintenanceworkingmemory,
+    'temporarybuffer=s' => \$temporarybuffer,
+    'verbose|v' => \$verbose,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
 
@@ -87,7 +93,9 @@ print "Max appearance rate: $max_appearance_rate\n";
 print "Max appearance nrow: $max_appearance_nrow\n";
 print "Occur bitlen: $occur_bitlen\n";
 print "Num threads: " . ($numthreads ? $numthreads : 'default') . "\n";
-print "Working memory: " . ($workingmemory ? $workingmemory : 'default') . "\n";
+print "Working memory: $workingmemory\n";
+print "Maintenance working memory: $maintenanceworkingmemory\n";
+print "Temporary buffer: $temporarybuffer\n";
 
 # Connect to PostgreSQL server first for validation
 my $password = $ENV{PGPASSWORD} || '';
@@ -119,7 +127,7 @@ my $dbh = DBI->connect($dsn, $username, $password, {
     pg_enable_utf8 => 1
 }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
 
-print "Connected to database successfully.\n";
+print "Connected to database successfully.\n" if $verbose;
 
 # Validate database permissions and schema
 validate_database_permissions($dbh, $username, $mode);
@@ -131,10 +139,10 @@ if ($tablespace && $mode eq 'create') {
 }
 
 # Acquire advisory lock for exclusive access to prevent conflicts with other tools
-print "Acquiring exclusive lock...\n";
+print "Acquiring exclusive lock...\n" if $verbose;
 eval {
     $dbh->do("SELECT pg_advisory_xact_lock(999)");
-    print "Exclusive lock acquired.\n";
+    print "Exclusive lock acquired.\n" if $verbose;
 };
 if ($@) {
     die "Failed to acquire advisory lock: $@\n";
@@ -145,7 +153,7 @@ verify_database_structure($dbh);
 
 # Detect PostgreSQL version
 my $pg_version = get_postgresql_version($dbh);
-print "PostgreSQL version: $pg_version\n";
+print "PostgreSQL version: $pg_version\n" if $verbose;
 
 # Set GUC variables
 set_guc_variables($dbh);
@@ -191,7 +199,10 @@ Other options:
   --max_appearance_nrow=INT   Max rows containing k-mer (default: 0=unlimited)
   --occur_bitlen=INT          Bits for occurrence count (default: 8, range: 0-16)
   --numthreads=INT            Number of parallel workers (default: 0=auto)
-  --workingmemory=SIZE        Working memory for index creation (e.g., 64GB, 512MB, default: PostgreSQL setting)
+  --workingmemory=SIZE        Work memory for each operation (default: 8GB)
+  --maintenanceworkingmemory=SIZE  Maintenance work memory for index creation (default: 8GB)
+  --temporarybuffer=SIZE      Temporary buffer size (default: 512MB)
+  --verbose, -v     Show detailed processing messages (default: false)
   --help, -h        Show this help message
 
 Environment variables:
@@ -205,8 +216,9 @@ Examples:
   af_kmerindex --mode=drop mydb
   af_kmerindex --mode=create --tablespace=fast_ssd mydb
   af_kmerindex --mode=create --kmer_size=16 mydb
-  af_kmerindex --mode=create --workingmemory=64GB mydb
-  af_kmerindex --mode=create --kmer_size=32 --workingmemory=128GB --tablespace=fast_ssd mydb
+  af_kmerindex --mode=create --maintenanceworkingmemory=64GB mydb
+  af_kmerindex --mode=create --kmer_size=32 --maintenanceworkingmemory=128GB --temporarybuffer=1GB mydb
+  af_kmerindex --mode=create --workingmemory=32GB --maintenanceworkingmemory=128GB --tablespace=fast_ssd mydb
   af_kmerindex --mode=create --max_appearance_rate=0.3 --max_appearance_nrow=500 mydb
   af_kmerindex --mode=create --occur_bitlen=12 --numthreads=8 mydb
 
@@ -272,10 +284,8 @@ sub create_indexes {
     
     print "Creating GIN indexes...\n";
     
-    # Validate and set working memory if specified
-    if ($workingmemory) {
-        validate_and_set_working_memory($dbh, $workingmemory);
-    }
+    # Validate and set memory parameters
+    validate_and_set_memory_parameters($dbh, $workingmemory, $maintenanceworkingmemory, $temporarybuffer);
     
     # Determine if high-frequency analysis should be performed
     my $should_perform_highfreq_analysis = ($max_appearance_rate > 0 || $max_appearance_nrow > 0);
@@ -473,33 +483,48 @@ SQL
     return \%indexes;
 }
 
-sub validate_and_set_working_memory {
-    my ($dbh, $memory_value) = @_;
+sub validate_and_set_memory_parameters {
+    my ($dbh, $work_mem_value, $maintenance_work_mem_value, $temp_buffers_value) = @_;
     
-    print "Validating and setting working memory to '$memory_value'...\n";
+    print "Setting memory parameters...\n";
     
-    # First, validate that PostgreSQL can recognize the memory value
+    # Set work_mem
     eval {
-        # Test the memory value by temporarily setting it
-        my $sth = $dbh->prepare("SELECT setting FROM pg_settings WHERE name = 'maintenance_work_mem'");
-        $sth->execute();
-        my ($original_value) = $sth->fetchrow_array();
-        $sth->finish();
-        
-        # Try to set the new value
-        $dbh->do("SET maintenance_work_mem = '$memory_value'");
-        
-        # If successful, get the actual value PostgreSQL understood
-        $sth = $dbh->prepare("SHOW maintenance_work_mem");
+        $dbh->do("SET work_mem = '$work_mem_value'");
+        my $sth = $dbh->prepare("SHOW work_mem");
         $sth->execute();
         my ($actual_value) = $sth->fetchrow_array();
         $sth->finish();
-        
-        print "Working memory set to '$actual_value' (from '$memory_value').\n";
+        print "work_mem set to '$actual_value' (from '$work_mem_value').\n";
     };
-    
     if ($@) {
-        die "Invalid working memory value '$memory_value': $@\n";
+        die "Invalid work_mem value '$work_mem_value': $@\n";
+    }
+    
+    # Set maintenance_work_mem
+    eval {
+        $dbh->do("SET maintenance_work_mem = '$maintenance_work_mem_value'");
+        my $sth = $dbh->prepare("SHOW maintenance_work_mem");
+        $sth->execute();
+        my ($actual_value) = $sth->fetchrow_array();
+        $sth->finish();
+        print "maintenance_work_mem set to '$actual_value' (from '$maintenance_work_mem_value').\n";
+    };
+    if ($@) {
+        die "Invalid maintenance_work_mem value '$maintenance_work_mem_value': $@\n";
+    }
+    
+    # Set temp_buffers
+    eval {
+        $dbh->do("SET temp_buffers = '$temp_buffers_value'");
+        my $sth = $dbh->prepare("SHOW temp_buffers");
+        $sth->execute();
+        my ($actual_value) = $sth->fetchrow_array();
+        $sth->finish();
+        print "temp_buffers set to '$actual_value' (from '$temp_buffers_value').\n";
+    };
+    if ($@) {
+        die "Invalid temp_buffers value '$temp_buffers_value': $@\n";
     }
 }
 

@@ -37,7 +37,11 @@ my $compress = $default_compress;
 my $batchsize = $default_batchsize;
 my @partitions = ();
 my $tablespace = '';
+my $workingmemory = '8GB';
+my $maintenanceworkingmemory = '8GB';
+my $temporarybuffer = '512MB';
 my $overwrite = 0;
+my $verbose = 0;
 my $help = 0;
 
 # Parse command line options
@@ -54,10 +58,14 @@ GetOptions(
     'batchsize=i' => \$batchsize,
     'partition=s' => \@partitions,
     'tablespace=s' => \$tablespace,
+    'workingmemory=s' => \$workingmemory,
+    'maintenanceworkingmemory=s' => \$maintenanceworkingmemory,
+    'temporarybuffer=s' => \$temporarybuffer,
     'overwrite:s' => sub {
         my ($name, $value) = @_;
         $overwrite = (!defined $value || $value eq '' || $value eq 'enable') ? 1 : 0;
     },
+    'verbose|v' => \$verbose,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
 
@@ -206,23 +214,23 @@ if (!$db_exists || $overwrite) {
 }
 
 # Process FASTA files
-print "Processing FASTA files...\n";
+print "Processing FASTA files...\n" if $verbose;
 my $total_sequences = 0;
 
 # Disconnect main process before starting worker processes
-print "Disconnecting main process to allow worker processes to run...\n";
+print "Disconnecting main process to allow worker processes to run...\n" if $verbose;
 $dbh->disconnect();
 
 eval {
     for my $i (0..$#input_files) {
         my $input_file = $input_files[$i];
-        print "Processing file " . ($i + 1) . "/" . scalar(@input_files) . ": $input_file\n";
+        print "Processing file " . ($i + 1) . "/" . scalar(@input_files) . ": $input_file\n" if $verbose;
         my $file_sequences = process_fasta_file($input_file, undef);
         $total_sequences += $file_sequences;
-        print "  Processed $file_sequences sequences from this file.\n";
+        print "  Processed $file_sequences sequences from this file.\n" if $verbose;
     }
     
-    print "All worker processes completed successfully.\n";
+    print "All worker processes completed successfully.\n" if $verbose;
 };
 
 if ($@) {
@@ -232,16 +240,45 @@ if ($@) {
 
 print "Total sequences processed: $total_sequences\n";
 
-# Reconnect main process for statistics update
-print "Reconnecting main process for statistics update...\n";
+# Reconnect main process for deduplication and statistics update
+print "Reconnecting main process for deduplication and statistics update...\n" if $verbose;
 $dbh = DBI->connect($dsn, $username, $password, {
     RaiseError => 1,
     AutoCommit => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot reconnect to database '$output_db': $DBI::errstr\n";
 
+# Configure PostgreSQL for efficient deduplication
+print "Configuring PostgreSQL for efficient deduplication...\n" if $verbose;
+# Set memory parameters
+$dbh->do("SET work_mem = '$workingmemory'");
+$dbh->do("SET maintenance_work_mem = '$maintenanceworkingmemory'");
+$dbh->do("SET random_page_cost = 1.1");
+$dbh->do("SET temp_buffers = '$temporarybuffer'");
+$dbh->do("SET max_parallel_workers_per_gather = $numthreads");
+$dbh->do("SET max_parallel_workers = " . ($numthreads * 2));
+
+print "PostgreSQL parallel processing configured: max_parallel_workers_per_gather=$numthreads\n" if $verbose;
+
+# Verify table exists before deduplication
+ensure_table_exists($dbh, 'af_kmersearch');
+
+# Run deduplication
+print "Starting deduplication process...\n" if $verbose;
+my $duplicate_count = deduplicate_sequences_simple($dbh);
+
+# Verify table exists after deduplication
+ensure_table_exists($dbh, 'af_kmersearch');
+
+# Final verification with record count
+my $final_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch");
+unless (defined $final_count) {
+    die "Table verification failed: af_kmersearch table missing after deduplication\n";
+}
+print "Deduplication verified. Final count: $final_count sequences.\n";
+
 # Update statistics in af_kmersearch_meta table
-print "Updating statistics in af_kmersearch_meta table...\n";
+print "Updating statistics in af_kmersearch_meta table...\n" if $verbose;
 update_meta_statistics($dbh);
 
 print "Processing completed successfully.\n";
@@ -284,7 +321,11 @@ Options:
   --batchsize=INT   Batch size for fragment processing (default: 100000)
   --partition=NAME  Partition name (can be specified multiple times or comma-separated)
   --tablespace=NAME Tablespace name for CREATE DATABASE (default: default tablespace)
+  --workingmemory=SIZE        Work memory for each operation (default: 8GB)
+  --maintenanceworkingmemory=SIZE  Maintenance work memory for operations (default: 8GB)
+  --temporarybuffer=SIZE      Temporary buffer size (default: 512MB)
   --overwrite       Overwrite existing database (default: false)
+  --verbose, -v     Show detailed processing messages (default: false)
   --help, -h        Show this help message
 
 Environment variables:
@@ -322,6 +363,8 @@ Examples:
   af_kmerstore --minlen=1000 --minsplitlen=50000 'genomes/*.fasta' mydb
   af_kmerstore --partition=bacteria,archaea 'bacteria/*.fasta' mydb
   af_kmerstore --overwrite --numthreads=4 'data/*.fasta.gz' mydb
+  af_kmerstore --workingmemory=32GB --maintenanceworkingmemory=64GB 'genomes/*.fasta' mydb
+  af_kmerstore --verbose --temporarybuffer=1GB 'genomes/*.fasta' mydb
   
   # Standard input
   cat input.fasta | af_kmerstore stdin mydb
@@ -418,9 +461,9 @@ SQL
         return 0;
     }
     
-    # Check that no indexes exist on af_kmersearch table
+    # Check that no seq-related indexes exist on af_kmersearch table
     $sth = $temp_dbh->prepare(
-        "SELECT 1 FROM pg_indexes WHERE tablename = 'af_kmersearch' LIMIT 1"
+        "SELECT 1 FROM pg_indexes WHERE tablename = 'af_kmersearch' AND indexname LIKE '%seq%' LIMIT 1"
     );
     $sth->execute();
     my $index_exists = $sth->fetchrow_array();
@@ -513,6 +556,7 @@ sub setup_database {
     # Check if pg_kmersearch extension is available and create if needed
     check_and_create_extension($dbh, "pg_kmersearch");
     
+    
     # Create meta table
     $dbh->do(<<SQL);
 CREATE TABLE IF NOT EXISTS af_kmersearch_meta (
@@ -539,19 +583,20 @@ SQL
     $sth->execute($VERSION, $minlen, $minsplitlen, $ovllen, 0, 0, '{}', undef, undef, undef, undef);
     $sth->finish();
     
-    # Create main table
+    # Create main table (simple structure - hash functions handle efficiency)
     $dbh->do(<<SQL);
 CREATE TABLE IF NOT EXISTS af_kmersearch (
-    seq $datatype PRIMARY KEY NOT NULL,
+    seq $datatype NOT NULL,
     part TEXT[],
     seqid TEXT[] NOT NULL
 )
 SQL
     
+    
     # Configure compression for af_kmersearch table columns
     configure_table_compression($dbh);
     
-    print "Database schema setup completed.\n";
+    print "Database schema setup completed.\n" if $verbose;
 }
 
 sub process_fasta_file {
@@ -651,7 +696,7 @@ sub process_streaming_with_batches {
         wait_for_any_child(\@active_children);
     }
     
-    print "All batches completed successfully.\n";
+    print "All batches completed successfully.\n" if $verbose;
     return $sequence_count;
 }
 
@@ -717,7 +762,7 @@ sub process_sequence_to_fragments {
     
     # Check sequence length filter
     if ($minlen > 0 && length($sequence) < $minlen) {
-        print STDERR "Skipping sequence '$header': length " . length($sequence) . " is below minimum length $minlen\n";
+        print STDERR "Skipping sequence '$header': length " . length($sequence) . " is below minimum length $minlen\n" if $verbose;
         return ();
     }
     
@@ -726,7 +771,7 @@ sub process_sequence_to_fragments {
     
     # Check if any accession numbers were found
     if (@accessions == 0) {
-        print STDERR "Warning: No accession number could be extracted from '$header' - skipping database registration\n";
+        print STDERR "Warning: No accession number could be extracted from '$header' - skipping database registration\n" if $verbose;
         return ();
     }
     
@@ -744,7 +789,7 @@ sub process_sequence_to_fragments {
         
         # Check fragment length filter
         if ($minlen > 0 && length($fragment_seq) < $minlen) {
-            print STDERR "Skipping fragment: length " . length($fragment_seq) . " is below minimum length $minlen\n";
+            print STDERR "Skipping fragment: length " . length($fragment_seq) . " is below minimum length $minlen\n" if $verbose;
             next;
         }
         
@@ -770,30 +815,17 @@ sub insert_fragment_batch {
     eval {
         $dbh->begin_work;
         
+        my $sth = $dbh->prepare("INSERT INTO af_kmersearch (seq, part, seqid) VALUES (?, ?, ?)");
+        
         for my $fragment (@$fragments) {
             my $fragment_seq = $fragment->{sequence};
             my $seqids = $fragment->{seqids};
             
-            # Try to insert new record
-            my $sth = $dbh->prepare(<<SQL);
-INSERT INTO af_kmersearch (seq, part, seqid) 
-VALUES (?, ?, ?) 
-ON CONFLICT (seq) DO UPDATE SET 
-    part = array(SELECT DISTINCT unnest(af_kmersearch.part || ?)), 
-    seqid = array(SELECT DISTINCT unnest(af_kmersearch.seqid || ?))
-SQL
-            
-            $sth->execute(
-                $fragment_seq, 
-                $partition_array, 
-                $seqids,
-                $partition_array,  # for UPDATE part
-                $seqids           # for UPDATE seqid
-            );
-            
-            $sth->finish();
+            # Simple INSERT without duplicate checking
+            $sth->execute($fragment_seq, $partition_array, $seqids);
         }
         
+        $sth->finish();
         $dbh->commit;
     };
     
@@ -1017,7 +1049,7 @@ sub insert_sequence_fragment {
         
         # Check fragment length filter
         if ($minlen > 0 && length($fragment_seq) < $minlen) {
-            print STDERR "Skipping fragment: length " . length($fragment_seq) . " is below minimum length $minlen\n";
+            print STDERR "Skipping fragment: length " . length($fragment_seq) . " is below minimum length $minlen\n" if $verbose;
             next;
         }
         
@@ -1028,30 +1060,72 @@ sub insert_sequence_fragment {
             push @seqids, $seqid;
         }
         
-        # Try to insert new record
-        my $sth = $dbh->prepare(<<SQL);
-INSERT INTO af_kmersearch (seq, part, seqid) 
-VALUES (?, ?, ?) 
-ON CONFLICT (seq) DO UPDATE SET 
-    part = array(SELECT DISTINCT unnest(af_kmersearch.part || ?)), 
-    seqid = array(SELECT DISTINCT unnest(af_kmersearch.seqid || ?))
-SQL
-        
+        # Simple INSERT for legacy compatibility (not used in new workflow)
         eval {
-            $sth->execute(
-                $fragment_seq, 
-                $partition_array, 
-                \@seqids,
-                $partition_array,  # for UPDATE part
-                \@seqids           # for UPDATE seqid
-            );
+            my $sth = $dbh->prepare("INSERT INTO af_kmersearch (seq, part, seqid) VALUES (?, ?, ?)");
+            $sth->execute($fragment_seq, $partition_array, \@seqids);
+            $sth->finish();
         };
         
         if ($@) {
             print STDERR "Error inserting sequence fragment: $@\n";
         }
+    }
+}
+
+sub ensure_table_exists {
+    my ($dbh, $table_name) = @_;
+    
+    my $exists = $dbh->selectrow_array(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = ?",
+        undef, $table_name
+    );
+    
+    unless ($exists) {
+        die "Critical error: Table '$table_name' does not exist\n";
+    }
+    
+    print "Table '$table_name' verified to exist.\n";
+}
+
+sub deduplicate_sequences_simple {
+    my ($dbh) = @_;
+    
+    print "Starting Perl-based deduplication...\n" if $verbose;
+    
+    eval {
+        $dbh->begin_work;
         
-        $sth->finish();
+        my $original_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch");
+        print "Original sequence count: $original_count\n";
+        
+        $dbh->do(<<SQL);
+CREATE TABLE af_kmersearch_deduplicated AS
+SELECT 
+    seq,
+    MIN(part) as part,
+    array_agg(DISTINCT s) as seqid
+FROM af_kmersearch, unnest(seqid) s
+GROUP BY seq
+SQL
+        
+        my $new_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch_deduplicated");
+        
+        $dbh->do("DROP TABLE af_kmersearch");
+        $dbh->do("ALTER TABLE af_kmersearch_deduplicated RENAME TO af_kmersearch");
+        
+        $dbh->commit;
+        
+        my $removed = $original_count - $new_count;
+        print "Deduplication completed. Removed $removed duplicate entries.\n";
+        
+        return $removed;
+    };
+    
+    if ($@) {
+        print STDERR "Deduplication failed: $@\n";
+        eval { $dbh->rollback; };
+        die "Deduplication process failed: $@\n";
     }
 }
 
@@ -1249,7 +1323,7 @@ sub validate_user_and_permissions {
             "  \\q\n";
     }
     
-    print "User validation completed.\n";
+    print "User validation completed.\n" if $verbose;
 }
 
 sub check_and_create_extension {
@@ -1322,8 +1396,20 @@ sub open_input_file {
     
     # Check for BLAST database
     if (!-f $filename && (-f "$filename.nsq" || -f "$filename.nal")) {
+        # Test blastdbcmd availability and version
+        my $version_output = `blastdbcmd -version 2>&1`;
+        my $exit_code = $? >> 8;
+        
+        if ($exit_code != 0 || $version_output !~ /blastdbcmd:\s+[\d\.]+/) {
+            die "blastdbcmd is not available or not working properly.\n" .
+                "Version check failed: $version_output\n" .
+                "Please install BLAST+ tools or check PATH.\n";
+        }
+        
+        print "Using blastdbcmd for BLAST database: $filename\n" if $verbose;
+        
         # BLAST nucleotide database
-        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', '>%a\\n%s\\n', '-line_length', '1000000', '-target_only' or die "Cannot open BLAST database '$filename': $!\n";
+        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '1000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
         return $fh;
     }
     
