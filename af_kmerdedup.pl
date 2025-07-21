@@ -91,6 +91,10 @@ my $dbh = DBI->connect($dsn, $username, $password, {
 # Check if af_kmersearch table exists
 ensure_table_exists($dbh, 'af_kmersearch');
 
+# Detect existing compression attributes from af_kmersearch table
+print "Detecting compression attributes from af_kmersearch table...\n" if $verbose;
+my ($storage_attr, $compression_attr) = detect_table_compression_attributes($dbh);
+
 # Acquire advisory lock for exclusive access
 print "Acquiring exclusive lock...\n";
 eval {
@@ -293,6 +297,9 @@ GROUP BY seq
 HAVING COUNT(*) > 1
 SQL
         
+        # Apply compression attributes to af_kmersearch_dupseq table
+        apply_table_compression($dbh, 'af_kmersearch_dupseq', ['seq'], $storage_attr, $compression_attr);
+        
         my $duplicate_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch_dupseq");
         print "Found $duplicate_count unique sequences with duplicates.\n";
         
@@ -310,6 +317,9 @@ FROM af_kmersearch a
 JOIN af_kmersearch_dupseq d ON d.seq = a.seq
 GROUP BY a.seq
 SQL
+            
+            # Apply compression attributes to af_kmersearch_dedup_temp table
+            apply_table_compression($dbh, 'af_kmersearch_dedup_temp', ['seq', 'part', 'seqid'], $storage_attr, $compression_attr);
             
             my $dedup_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch_dedup_temp");
             print "Created $dedup_count deduplicated records from duplicates.\n";
@@ -505,5 +515,70 @@ sub validate_and_set_temp_buffers {
     
     if ($@) {
         die "Error: Invalid temporary buffer value '$buffer_value': $@\n";
+    }
+}
+
+sub detect_table_compression_attributes {
+    my ($dbh) = @_;
+    
+    print "Detecting compression attributes from af_kmersearch.seq column...\n" if $verbose;
+    
+    my $sth = $dbh->prepare(<<SQL);
+SELECT attstorage, attcompression 
+FROM pg_attribute 
+JOIN pg_class ON pg_attribute.attrelid = pg_class.oid 
+WHERE pg_class.relname = 'af_kmersearch' 
+AND pg_attribute.attname = 'seq'
+SQL
+    
+    $sth->execute();
+    my ($storage, $compression) = $sth->fetchrow_array();
+    $sth->finish();
+    
+    unless (defined $storage) {
+        die "Failed to detect storage attribute for af_kmersearch.seq column\n";
+    }
+    
+    # Convert PostgreSQL storage codes to readable names
+    my %storage_map = (
+        'p' => 'PLAIN',
+        'e' => 'EXTERNAL', 
+        'x' => 'EXTENDED',
+        'm' => 'MAIN'
+    );
+    
+    my $storage_name = $storage_map{$storage} || $storage;
+    my $compression_name = defined $compression ? $compression : 'none';
+    
+    print "Detected compression attributes: STORAGE=$storage_name";
+    if ($compression_name ne 'none' && $storage_name eq 'EXTENDED') {
+        print ", COMPRESSION=$compression_name";
+    }
+    print "\n";
+    
+    return ($storage_name, $compression_name);
+}
+
+sub apply_table_compression {
+    my ($dbh, $table_name, $columns, $storage_attr, $compression_attr) = @_;
+    
+    print "Applying compression attributes to table '$table_name'...\n" if $verbose;
+    
+    for my $column (@$columns) {
+        eval {
+            # Set storage attribute
+            $dbh->do("ALTER TABLE $table_name ALTER COLUMN $column SET STORAGE $storage_attr");
+            
+            # Set compression attribute only if storage is EXTENDED and compression is available
+            if ($storage_attr eq 'EXTENDED' && $compression_attr ne 'none') {
+                $dbh->do("ALTER TABLE $table_name ALTER COLUMN $column SET COMPRESSION $compression_attr");
+                print "Applied STORAGE=$storage_attr, COMPRESSION=$compression_attr to $table_name.$column\n" if $verbose;
+            } else {
+                print "Applied STORAGE=$storage_attr to $table_name.$column\n" if $verbose;
+            }
+        };
+        if ($@) {
+            print STDERR "Warning: Failed to set compression attributes for $table_name.$column: $@\n";
+        }
     }
 }

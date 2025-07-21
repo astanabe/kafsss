@@ -240,42 +240,23 @@ if ($@) {
 
 print "Total sequences processed: $total_sequences\n";
 
-# Reconnect main process for deduplication and statistics update
-print "Reconnecting main process for deduplication and statistics update...\n" if $verbose;
+# Reconnect main process for statistics update
+print "Reconnecting main process for statistics update...\n" if $verbose;
 $dbh = DBI->connect($dsn, $username, $password, {
     RaiseError => 1,
     AutoCommit => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot reconnect to database '$output_db': $DBI::errstr\n";
 
-# Configure PostgreSQL for efficient deduplication
-print "Configuring PostgreSQL for efficient deduplication...\n" if $verbose;
-# Set memory parameters
-$dbh->do("SET work_mem = '$workingmemory'");
-$dbh->do("SET maintenance_work_mem = '$maintenanceworkingmemory'");
-$dbh->do("SET random_page_cost = 1.1");
-$dbh->do("SET temp_buffers = '$temporarybuffer'");
-$dbh->do("SET max_parallel_workers_per_gather = $numthreads");
-$dbh->do("SET max_parallel_workers = " . ($numthreads * 2));
-
-print "PostgreSQL parallel processing configured: max_parallel_workers_per_gather=$numthreads\n" if $verbose;
-
-# Verify table exists before deduplication
-ensure_table_exists($dbh, 'af_kmersearch');
-
-# Run deduplication
-print "Starting deduplication process...\n" if $verbose;
-my $duplicate_count = deduplicate_sequences_simple($dbh);
-
-# Verify table exists after deduplication
+# Verify table exists
 ensure_table_exists($dbh, 'af_kmersearch');
 
 # Final verification with record count
 my $final_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch");
 unless (defined $final_count) {
-    die "Table verification failed: af_kmersearch table missing after deduplication\n";
+    die "Table verification failed: af_kmersearch table missing\n";
 }
-print "Deduplication verified. Final count: $final_count sequences.\n";
+print "Final count: $final_count sequences.\n";
 
 # Update statistics in af_kmersearch_meta table
 print "Updating statistics in af_kmersearch_meta table...\n" if $verbose;
@@ -1088,46 +1069,6 @@ sub ensure_table_exists {
     print "Table '$table_name' verified to exist.\n";
 }
 
-sub deduplicate_sequences_simple {
-    my ($dbh) = @_;
-    
-    print "Starting Perl-based deduplication...\n" if $verbose;
-    
-    eval {
-        $dbh->begin_work;
-        
-        my $original_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch");
-        print "Original sequence count: $original_count\n";
-        
-        $dbh->do(<<SQL);
-CREATE TABLE af_kmersearch_deduplicated AS
-SELECT 
-    seq,
-    MIN(part) as part,
-    array_agg(DISTINCT s) as seqid
-FROM af_kmersearch, unnest(seqid) s
-GROUP BY seq
-SQL
-        
-        my $new_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch_deduplicated");
-        
-        $dbh->do("DROP TABLE af_kmersearch");
-        $dbh->do("ALTER TABLE af_kmersearch_deduplicated RENAME TO af_kmersearch");
-        
-        $dbh->commit;
-        
-        my $removed = $original_count - $new_count;
-        print "Deduplication completed. Removed $removed duplicate entries.\n";
-        
-        return $removed;
-    };
-    
-    if ($@) {
-        print STDERR "Deduplication failed: $@\n";
-        eval { $dbh->rollback; };
-        die "Deduplication process failed: $@\n";
-    }
-}
 
 sub update_meta_statistics {
     my ($dbh) = @_;
