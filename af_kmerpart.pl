@@ -27,6 +27,7 @@ my $numthreads = $default_numthreads;
 my $batchsize = $default_batchsize;
 my @partitions = ();
 my $mode = 'add';
+my $verbose = 0;
 my $help = 0;
 
 # Parse command line options
@@ -38,6 +39,7 @@ GetOptions(
     'batchsize=i' => \$batchsize,
     'partition=s' => \@partitions,
     'mode=s' => \$mode,
+    'verbose|v' => \$verbose,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
 
@@ -146,14 +148,14 @@ if ($@) {
 
 # Disconnect database connection before parallel processing to avoid connection sharing
 $dbh->disconnect();
-print "Database connection closed before parallel processing.\n";
+print "Database connection closed before parallel processing.\n" if $verbose;
 
 # Process accession numbers with memory-efficient streaming
 if ($input_file eq 'all') {
-    print "Processing all rows in database...\n";
+    print "Processing all rows in database...\n" if $verbose;
     process_all_rows();
 } else {
-    print "Processing accession numbers from input file...\n";
+    print "Processing accession numbers from input file...\n" if $verbose;
     process_accessions_batch_streaming($input_file);
 }
 
@@ -196,6 +198,7 @@ Other options:
   --username=USER   PostgreSQL username (default: \$PGUSER or current user)
   --numthreads=INT  Number of parallel threads (default: 1)
   --batchsize=INT   Batch size for processing (default: 1000000)
+  --verbose, -v     Show detailed processing messages (default: false)
   --help, -h        Show this help message
 
 Environment variables:
@@ -570,7 +573,7 @@ sub process_accessions_single_threaded {
             process_single_accession($accession, $dbh);
         }
         $dbh->commit;
-        print "Transaction committed successfully for batch processing.\n";
+        print "Transaction committed successfully for batch processing.\n" if $verbose;
     };
     
     if ($@) {
@@ -719,7 +722,7 @@ sub process_all_rows {
     
     # Close temporary connection before starting parallel processing
     $temp_dbh->disconnect();
-    print "Temporary database connection closed before batch processing.\n";
+    print "Temporary database connection closed before batch processing.\n" if $verbose;
     
     # Process all rows in batches
     my $offset = 0;

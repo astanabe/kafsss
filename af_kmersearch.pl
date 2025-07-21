@@ -33,6 +33,7 @@ my $minscore = undef;
 my $minpsharedkey = $default_minpsharedkey;
 my $numthreads = $default_numthreads;
 my $mode = $default_mode;
+my $verbose = 0;
 my $help = 0;
 
 # Parse command line options
@@ -47,6 +48,7 @@ GetOptions(
     'minpsharedkey=f' => \$minpsharedkey,
     'numthreads=i' => \$numthreads,
     'mode=s' => \$mode,
+    'verbose|v' => \$verbose,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
 
@@ -235,13 +237,13 @@ if ($numthreads > 1) {
 my $output_fh = open_output_file($output_file);
 
 # Process FASTA sequences from multiple files
-print "Processing FASTA sequences...\n";
+print "Processing FASTA sequences...\n" if $verbose;
 my $total_results = 0;
 my $total_queries = 0;
 
 for my $i (0..$#input_files) {
     my $input_file = $input_files[$i];
-    print "Processing file " . ($i + 1) . "/" . scalar(@input_files) . ": $input_file\n";
+    print "Processing file " . ($i + 1) . "/" . scalar(@input_files) . ": $input_file\n" if $verbose;
     
     # Open current input file
     my $input_fh = open_input_file($input_file);
@@ -309,6 +311,7 @@ Other options:
   --minpsharedkey=REAL  Minimum percentage of shared keys (0.0-1.0, default: 0.9)
   --numthreads=INT  Number of parallel threads (default: 1)
   --mode=MODE       Output mode: minimum, normal, maximum (default: normal)
+  --verbose, -v     Show detailed processing messages (default: false)
   --help, -h        Show this help message
 
 Environment variables:
@@ -396,8 +399,20 @@ sub open_input_file {
     
     # Check for BLAST database
     if (!-f $filename && (-f "$filename.nsq" || -f "$filename.nal")) {
+        # Test blastdbcmd availability and version
+        my $version_output = `blastdbcmd -version 2>&1`;
+        my $exit_code = $? >> 8;
+        
+        if ($exit_code != 0 || $version_output !~ /blastdbcmd:\s+[\d\.]+/) {
+            die "blastdbcmd is not available or not working properly.\n" .
+                "Version check failed: $version_output\n" .
+                "Please install BLAST+ tools or check PATH.\n";
+        }
+        
+        print "Using blastdbcmd for BLAST database: $filename\n" if $verbose;
+        
         # BLAST nucleotide database
-        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', '>%a\n%s\n', '-line_length', '1000000', '-target_only' or die "Cannot open BLAST database '$filename': $!\n";
+        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '1000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
         return $fh;
     }
     

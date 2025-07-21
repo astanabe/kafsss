@@ -49,6 +49,7 @@ my $http_password = '';
 my $resume_job_id = '';
 my $cancel_job_id = '';
 my $show_jobs = 0;
+my $verbose = 0;
 my $help = 0;
 
 # Parse command line options
@@ -72,6 +73,7 @@ GetOptions(
     'resume=s' => \$resume_job_id,
     'cancel=s' => \$cancel_job_id,
     'jobs' => \$show_jobs,
+    'verbose|v' => \$verbose,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
 
@@ -240,7 +242,7 @@ if ($global_output_file) {
 }
 
 # Process sequences with parallel streaming
-print STDERR "Starting parallel processing with $numthreads threads...\n";
+print STDERR "Starting parallel processing with $numthreads threads...\n" if $verbose;
 my $result = process_sequences_parallel_streaming(@global_input_files);
 
 print STDERR "Processing completed successfully.\n";
@@ -992,6 +994,7 @@ Other options:
   --netrc-file=FILE Read authentication credentials from .netrc format file
   --http-user=USER  HTTP Basic authentication username (requires --http-password)
   --http-password=PASS HTTP Basic authentication password (requires --http-user)
+  --verbose, -v     Show detailed processing messages (default: false)
   --help, -h        Show this help message
 
 Polling behavior:
@@ -1248,8 +1251,20 @@ sub open_input_file {
     
     # Check for BLAST database
     if (!-f $filename && (-f "$filename.nsq" || -f "$filename.nal")) {
+        # Test blastdbcmd availability and version
+        my $version_output = `blastdbcmd -version 2>&1`;
+        my $exit_code = $? >> 8;
+        
+        if ($exit_code != 0 || $version_output !~ /blastdbcmd:\s+[\d\.]+/) {
+            die "blastdbcmd is not available or not working properly.\n" .
+                "Version check failed: $version_output\n" .
+                "Please install BLAST+ tools or check PATH.\n";
+        }
+        
+        print "Using blastdbcmd for BLAST database: $filename\n" if $verbose;
+        
         # BLAST nucleotide database
-        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', '>%a\n%s\n', '-line_length', '1000000', '-target_only' or die "Cannot open BLAST database '$filename': $!\n";
+        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '1000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
         return $fh;
     }
     
