@@ -35,7 +35,7 @@ my $ovllen = $default_ovllen;
 my $numthreads = $default_numthreads;
 my $compress = $default_compress;
 my $batchsize = $default_batchsize;
-my @partitions = ();
+my @subsets = ();
 my $tablespace = '';
 my $workingmemory = '8GB';
 my $maintenanceworkingmemory = '8GB';
@@ -56,7 +56,7 @@ GetOptions(
     'numthreads=i' => \$numthreads,
     'compress=s' => \$compress,
     'batchsize=i' => \$batchsize,
-    'partition=s' => \@partitions,
+    'subset=s' => \@subsets,
     'tablespace=s' => \$tablespace,
     'workingmemory=s' => \$workingmemory,
     'maintenanceworkingmemory=s' => \$maintenanceworkingmemory,
@@ -77,7 +77,7 @@ if ($help) {
 
 # Check required arguments
 if (@ARGV < 2) {
-    die "Usage: af_kmerstore [options] input_file(s) output_database\n" .
+    die "Usage: kafssstore [options] input_file(s) output_database\n" .
         "Use --help for detailed usage information.\n";
 }
 
@@ -108,16 +108,16 @@ die "ovllen must be less than half of minsplitlen to prevent overlap conflicts\n
 die "numthreads must be positive integer\n" unless $numthreads > 0;
 die "batchsize must be positive integer\n" unless $batchsize > 0;
 
-# Parse partitions from comma-separated values
-my @all_partitions = ();
-for my $partition_spec (@partitions) {
-    push @all_partitions, split(/,/, $partition_spec);
+# Parse subsets from comma-separated values
+my @all_subsets = ();
+for my $subset_spec (@subsets) {
+    push @all_subsets, split(/,/, $subset_spec);
 }
 
-# Create partition array for PostgreSQL
-my $partition_array = \@all_partitions;
+# Create subset array for PostgreSQL
+my $subset_array = \@all_subsets;
 
-print "af_kmerstore version $VERSION\n";
+print "kafssstore version $VERSION\n";
 print "Input files (" . scalar(@input_files) . "):\n";
 for my $i (0..$#input_files) {
     print "  " . ($i + 1) . ". $input_files[$i]\n";
@@ -133,7 +133,7 @@ print "Overlap length: $ovllen\n";
 print "Number of threads: $numthreads\n";
 print "Compression: $compress\n";
 print "Batch size: $batchsize\n";
-print "Partitions: " . (@all_partitions ? join(', ', @all_partitions) : 'none') . "\n";
+print "Subsets: " . (@all_subsets ? join(', ', @all_subsets) : 'none') . "\n";
 print "Tablespace: " . ($tablespace ? $tablespace : 'default') . "\n";
 print "Overwrite: " . ($overwrite ? 'yes' : 'no') . "\n";
 
@@ -249,17 +249,17 @@ $dbh = DBI->connect($dsn, $username, $password, {
 }) or die "Cannot reconnect to database '$output_db': $DBI::errstr\n";
 
 # Verify table exists
-ensure_table_exists($dbh, 'af_kmersearch');
+ensure_table_exists($dbh, 'kafsss_data');
 
 # Final verification with record count
-my $final_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch");
+my $final_count = $dbh->selectrow_array("SELECT COUNT(*) FROM kafsss_data");
 unless (defined $final_count) {
-    die "Table verification failed: af_kmersearch table missing\n";
+    die "Table verification failed: kafsss_data table missing\n";
 }
 print "Final count: $final_count sequences.\n";
 
-# Update statistics in af_kmersearch_meta table
-print "Updating statistics in af_kmersearch_meta table...\n" if $verbose;
+# Update statistics in kafsss_meta table
+print "Updating statistics in kafsss_meta table...\n" if $verbose;
 update_meta_statistics($dbh);
 
 print "Processing completed successfully.\n";
@@ -274,9 +274,9 @@ exit 0;
 
 sub print_help {
     print <<EOF;
-af_kmerstore version $VERSION
+kafssstore version $VERSION
 
-Usage: af_kmerstore [options] input_file(s) output_database
+Usage: kafssstore [options] input_file(s) output_database
 
 Store multi-FASTA DNA sequences from multiple sources into PostgreSQL database using pg_kmersearch extension.
 
@@ -300,7 +300,7 @@ Options:
   --numthreads=INT  Number of parallel threads (default: 1)
   --compress=TYPE   Column compression type: lz4, pglz, or disable (default: lz4)
   --batchsize=INT   Batch size for fragment processing (default: 100000)
-  --partition=NAME  Partition name (can be specified multiple times or comma-separated)
+  --subset=NAME  Subset name (can be specified multiple times or comma-separated)
   --tablespace=NAME Tablespace name for CREATE DATABASE (default: default tablespace)
   --workingmemory=SIZE        Work memory for each operation (default: 8GB)
   --maintenanceworkingmemory=SIZE  Maintenance work memory for operations (default: 8GB)
@@ -317,38 +317,38 @@ Environment variables:
 
 Examples:
   # Single file
-  af_kmerstore input.fasta mydb
+  kafssstore input.fasta mydb
   
   # Multiple files
-  af_kmerstore file1.fasta file2.fasta mydb
+  kafssstore file1.fasta file2.fasta mydb
   
   # Wildcard pattern (use quotes to prevent shell expansion)
-  af_kmerstore 'data/*.fasta' mydb
-  af_kmerstore '/path/to/genomes/*.fna' mydb
+  kafssstore 'data/*.fasta' mydb
+  kafssstore '/path/to/genomes/*.fna' mydb
   
   # Compressed files
-  af_kmerstore genome.fasta.gz mydb
-  af_kmerstore 'data/*.fasta.bz2' mydb
-  af_kmerstore sequence.fna.xz mydb
-  af_kmerstore genome.fasta.zst mydb
+  kafssstore genome.fasta.gz mydb
+  kafssstore 'data/*.fasta.bz2' mydb
+  kafssstore sequence.fna.xz mydb
+  kafssstore genome.fasta.zst mydb
   
   # BLAST database
-  af_kmerstore nr mydb
-  af_kmerstore /databases/nt mydb
+  kafssstore nr mydb
+  kafssstore /databases/nt mydb
   
   # Mixed sources
-  af_kmerstore file1.fasta 'data/*.fasta.gz' blastdb mydb
+  kafssstore file1.fasta 'data/*.fasta.gz' blastdb mydb
   
   # With options
-  af_kmerstore --datatype=DNA2 --minsplitlen=100000 'genomes/*.fasta' mydb
-  af_kmerstore --minlen=1000 --minsplitlen=50000 'genomes/*.fasta' mydb
-  af_kmerstore --partition=bacteria,archaea 'bacteria/*.fasta' mydb
-  af_kmerstore --overwrite --numthreads=4 'data/*.fasta.gz' mydb
-  af_kmerstore --workingmemory=32GB --maintenanceworkingmemory=64GB 'genomes/*.fasta' mydb
-  af_kmerstore --verbose --temporarybuffer=1GB 'genomes/*.fasta' mydb
+  kafssstore --datatype=DNA2 --minsplitlen=100000 'genomes/*.fasta' mydb
+  kafssstore --minlen=1000 --minsplitlen=50000 'genomes/*.fasta' mydb
+  kafssstore --subset=bacteria,archaea 'bacteria/*.fasta' mydb
+  kafssstore --overwrite --numthreads=4 'data/*.fasta.gz' mydb
+  kafssstore --workingmemory=32GB --maintenanceworkingmemory=64GB 'genomes/*.fasta' mydb
+  kafssstore --verbose --temporarybuffer=1GB 'genomes/*.fasta' mydb
   
   # Standard input
-  cat input.fasta | af_kmerstore stdin mydb
+  cat input.fasta | kafssstore stdin mydb
 
 EOF
 }
@@ -391,7 +391,7 @@ sub validate_existing_database {
     return 0 unless check_main_table_schema($temp_dbh);
     
     # Check meta table values
-    $sth = $temp_dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen FROM af_kmersearch_meta LIMIT 1");
+    $sth = $temp_dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen FROM kafsss_meta LIMIT 1");
     $sth->execute();
     my ($db_ver, $db_minlen, $db_minsplitlen, $db_ovllen) = $sth->fetchrow_array();
     $sth->finish();
@@ -423,7 +423,7 @@ sub validate_existing_database {
     $sth = $temp_dbh->prepare(<<SQL);
 SELECT CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
 FROM information_schema.columns 
-WHERE table_name = 'af_kmersearch' AND column_name = 'seq'
+WHERE table_name = 'kafsss_data' AND column_name = 'seq'
 SQL
     $sth->execute();
     my ($seq_datatype) = $sth->fetchrow_array();
@@ -442,9 +442,9 @@ SQL
         return 0;
     }
     
-    # Check that no seq-related indexes exist on af_kmersearch table
+    # Check that no seq-related indexes exist on kafsss_data table
     $sth = $temp_dbh->prepare(
-        "SELECT 1 FROM pg_indexes WHERE tablename = 'af_kmersearch' AND indexname LIKE '%seq%' LIMIT 1"
+        "SELECT 1 FROM pg_indexes WHERE tablename = 'kafsss_data' AND indexname LIKE '%seq%' LIMIT 1"
     );
     $sth->execute();
     my $index_exists = $sth->fetchrow_array();
@@ -462,7 +462,7 @@ sub check_meta_table_schema {
     my $sth = $dbh->prepare(<<SQL);
 SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
 FROM information_schema.columns 
-WHERE table_name = 'af_kmersearch_meta' 
+WHERE table_name = 'kafsss_meta' 
 ORDER BY column_name
 SQL
     $sth->execute();
@@ -474,7 +474,7 @@ SQL
         'ovllen' => 'smallint',
         'nseq' => 'bigint',
         'nchar' => 'bigint',
-        'part' => 'jsonb',
+        'subset' => 'jsonb',
         'kmer_size' => 'integer',
         'occur_bitlen' => 'integer',
         'max_appearance_rate' => 'real',
@@ -493,7 +493,7 @@ SQL
            $actual{ovllen} eq $expected{ovllen} &&
            $actual{nseq} eq $expected{nseq} &&
            $actual{nchar} eq $expected{nchar} &&
-           $actual{part} eq $expected{part} &&
+           $actual{subset} eq $expected{subset} &&
            $actual{kmer_size} eq $expected{kmer_size} &&
            $actual{occur_bitlen} eq $expected{occur_bitlen} &&
            $actual{max_appearance_rate} eq $expected{max_appearance_rate} &&
@@ -506,14 +506,14 @@ sub check_main_table_schema {
     my $sth = $dbh->prepare(<<SQL);
 SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
 FROM information_schema.columns 
-WHERE table_name = 'af_kmersearch' 
+WHERE table_name = 'kafsss_data' 
 ORDER BY column_name
 SQL
     $sth->execute();
     
     my %expected = (
         'seq' => lc($datatype),
-        'part' => 'ARRAY',
+        'subset' => 'ARRAY',
         'seqid' => 'ARRAY'
     );
     
@@ -525,7 +525,7 @@ SQL
     
     return %actual == %expected && 
            $actual{seq} eq $expected{seq} && 
-           $actual{part} eq $expected{part} && 
+           $actual{subset} eq $expected{subset} && 
            $actual{seqid} eq $expected{seqid};
 }
 
@@ -540,14 +540,14 @@ sub setup_database {
     
     # Create meta table
     $dbh->do(<<SQL);
-CREATE TABLE IF NOT EXISTS af_kmersearch_meta (
+CREATE TABLE IF NOT EXISTS kafsss_meta (
     ver TEXT NOT NULL,
     minlen INTEGER NOT NULL,
     minsplitlen INTEGER NOT NULL,
     ovllen SMALLINT NOT NULL,
     nseq BIGINT,
     nchar BIGINT,
-    part JSONB,
+    subset JSONB,
     kmer_size INTEGER,
     occur_bitlen INTEGER,
     max_appearance_rate REAL,
@@ -556,25 +556,25 @@ CREATE TABLE IF NOT EXISTS af_kmersearch_meta (
 SQL
     
     # Insert meta data
-    my $sth = $dbh->prepare("DELETE FROM af_kmersearch_meta");
+    my $sth = $dbh->prepare("DELETE FROM kafsss_meta");
     $sth->execute();
     $sth->finish();
     
-    $sth = $dbh->prepare("INSERT INTO af_kmersearch_meta (ver, minlen, minsplitlen, ovllen, nseq, nchar, part, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $sth = $dbh->prepare("INSERT INTO kafsss_meta (ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     $sth->execute($VERSION, $minlen, $minsplitlen, $ovllen, 0, 0, '{}', undef, undef, undef, undef);
     $sth->finish();
     
     # Create main table (simple structure - hash functions handle efficiency)
     $dbh->do(<<SQL);
-CREATE TABLE IF NOT EXISTS af_kmersearch (
+CREATE TABLE IF NOT EXISTS kafsss_data (
     seq $datatype NOT NULL,
-    part TEXT[],
+    subset TEXT[],
     seqid TEXT[] NOT NULL
 )
 SQL
     
     
-    # Configure compression for af_kmersearch table columns
+    # Configure compression for kafsss_data table columns
     configure_table_compression($dbh);
     
     print "Database schema setup completed.\n" if $verbose;
@@ -796,14 +796,14 @@ sub insert_fragment_batch {
     eval {
         $dbh->begin_work;
         
-        my $sth = $dbh->prepare("INSERT INTO af_kmersearch (seq, part, seqid) VALUES (?, ?, ?)");
+        my $sth = $dbh->prepare("INSERT INTO kafsss_data (seq, subset, seqid) VALUES (?, ?, ?)");
         
         for my $fragment (@$fragments) {
             my $fragment_seq = $fragment->{sequence};
             my $seqids = $fragment->{seqids};
             
             # Simple INSERT without duplicate checking
-            $sth->execute($fragment_seq, $partition_array, $seqids);
+            $sth->execute($fragment_seq, $subset_array, $seqids);
         }
         
         $sth->finish();
@@ -851,33 +851,33 @@ sub extract_accession {
     my @accessions = ();
     
     # Split by SOH (control character ^A) for merged FASTA labels
-    my @header_parts = split(/\cA+/, $header);
+    my @header_subsets = split(/\cA+/, $header);
     
-    for my $part (@header_parts) {
+    for my $subset (@header_subsets) {
         # Remove everything after the first space
-        $part =~ s/ .+$//;
+        $subset =~ s/ .+$//;
         
-        my @part_accessions = ();
+        my @subset_accessions = ();
         
         # Try to extract accession numbers from database-specific formats
         # Format: gb|U13106.1| or |gb|U13106.1| (multiple can exist)
-        if ($part =~ /^(?:gb|emb|dbj|ref|lcl)\|([^\|\s]+)/ || $part =~ /\|(?:gb|emb|dbj|ref|lcl)\|([^\|\s]+)/) {
-            my $temp_part = $part;
-            while ($temp_part =~ /(?:^|.)(?:gb|emb|dbj|ref|lcl)\|([^\|\s]+)/g) {
+        if ($subset =~ /^(?:gb|emb|dbj|ref|lcl)\|([^\|\s]+)/ || $subset =~ /\|(?:gb|emb|dbj|ref|lcl)\|([^\|\s]+)/) {
+            my $temp_subset = $subset;
+            while ($temp_subset =~ /(?:^|.)(?:gb|emb|dbj|ref|lcl)\|([^\|\s]+)/g) {
                 my $acc = $1;
                 $acc =~ s/\.\d+$//;  # Remove version
-                push @part_accessions, $acc;
+                push @subset_accessions, $acc;
             }
         }
         
         # Fallback: extract first token
-        if (@part_accessions == 0 && $part =~ /^([^\|\s]+)/) {
+        if (@subset_accessions == 0 && $subset =~ /^([^\|\s]+)/) {
             my $acc = $1;
             $acc =~ s/\.\d+$//;  # Remove version
-            push @part_accessions, $acc;
+            push @subset_accessions, $acc;
         }
         
-        push @accessions, @part_accessions;
+        push @accessions, @subset_accessions;
     }
     
     # Remove duplicates and return all accession numbers
@@ -1043,8 +1043,8 @@ sub insert_sequence_fragment {
         
         # Simple INSERT for legacy compatibility (not used in new workflow)
         eval {
-            my $sth = $dbh->prepare("INSERT INTO af_kmersearch (seq, part, seqid) VALUES (?, ?, ?)");
-            $sth->execute($fragment_seq, $partition_array, \@seqids);
+            my $sth = $dbh->prepare("INSERT INTO kafsss_data (seq, subset, seqid) VALUES (?, ?, ?)");
+            $sth->execute($fragment_seq, $subset_array, \@seqids);
             $sth->finish();
         };
         
@@ -1080,7 +1080,7 @@ sub update_meta_statistics {
 SELECT 
     COUNT(*) as nseq,
     SUM(nuc_length(seq)) as total_nchar
-FROM af_kmersearch
+FROM kafsss_data
 SQL
     
     $sth->execute();
@@ -1089,55 +1089,55 @@ SQL
     
     print "Total sequences: $nseq, Total bases: $nchar\n";
     
-    # Calculate partition-specific statistics with single query
-    print "Calculating partition-specific statistics...\n";
+    # Calculate subset-specific statistics with single query
+    print "Calculating subset-specific statistics...\n";
     
     $sth = $dbh->prepare(<<SQL);
 SELECT 
-    partition_name, 
+    subset_name, 
     COUNT(*) AS nseq, 
     SUM(nuc_length(seq)) AS total_nchar 
 FROM (
-    SELECT unnest(part) AS partition_name, seq 
-    FROM af_kmersearch 
-    WHERE part IS NOT NULL AND array_length(part, 1) > 0
-) AS unnested_parts 
-GROUP BY partition_name
+    SELECT unnest(subset) AS subset_name, seq 
+    FROM kafsss_data 
+    WHERE subset IS NOT NULL AND array_length(subset, 1) > 0
+) AS unnested_subsets 
+GROUP BY subset_name
 SQL
     
     $sth->execute();
-    my %partition_stats = ();
+    my %subset_stats = ();
     
-    while (my ($partition, $part_nseq, $part_nchar) = $sth->fetchrow_array()) {
-        $partition_stats{$partition} = {
-            nseq => $part_nseq,
-            nchar => $part_nchar
+    while (my ($subset, $subset_nseq, $subset_nchar) = $sth->fetchrow_array()) {
+        $subset_stats{$subset} = {
+            nseq => $subset_nseq,
+            nchar => $subset_nchar
         };
         
-        print "  Partition '$partition': $part_nseq sequences, $part_nchar bases\n";
+        print "  Subset '$subset': $subset_nseq sequences, $subset_nchar bases\n";
     }
     $sth->finish();
     
-    # Prepare partition statistics JSON
-    my $part_json = encode_json(\%partition_stats);
+    # Prepare subset statistics JSON
+    my $subset_json = encode_json(\%subset_stats);
     
-    # Update af_kmersearch_meta table
-    print "Updating af_kmersearch_meta table with statistics...\n";
+    # Update kafsss_meta table
+    print "Updating kafsss_meta table with statistics...\n";
     
     $sth = $dbh->prepare(<<SQL);
-UPDATE af_kmersearch_meta 
-SET nseq = ?, nchar = ?, part = ?
+UPDATE kafsss_meta 
+SET nseq = ?, nchar = ?, subset = ?
 SQL
     
     eval {
         $dbh->begin_work;
-        $sth->execute($nseq, $nchar, $part_json);
+        $sth->execute($nseq, $nchar, $subset_json);
         $dbh->commit;
         print "Transaction committed successfully for statistics update.\n";
     };
     
     if ($@) {
-        print STDERR "Error updating af_kmersearch_meta statistics: $@\n";
+        print STDERR "Error updating kafsss_meta statistics: $@\n";
         eval { $dbh->rollback; };
         $sth->finish();
         die "Statistics update failed: $@\n";
@@ -1153,46 +1153,46 @@ sub configure_table_compression {
     
     print "Configuring table compression: $compress\n";
     
-    # Configure compression for seq, part, and seqid columns
-    my @columns = ('seq', 'part', 'seqid');
+    # Configure compression for seq, subset, and seqid columns
+    my @columns = ('seq', 'subset', 'seqid');
     
     if ($compress eq 'lz4') {
         # Enable lz4 compression
         for my $column (@columns) {
             eval {
-                $dbh->do("ALTER TABLE af_kmersearch ALTER COLUMN $column SET STORAGE EXTENDED");
-                $dbh->do("ALTER TABLE af_kmersearch ALTER COLUMN $column SET COMPRESSION lz4");
+                $dbh->do("ALTER TABLE kafsss_data ALTER COLUMN $column SET STORAGE EXTENDED");
+                $dbh->do("ALTER TABLE kafsss_data ALTER COLUMN $column SET COMPRESSION lz4");
             };
             if ($@) {
                 print STDERR "Warning: Failed to set lz4 compression for column '$column': $@\n";
             }
         }
-        print "LZ4 compression enabled for af_kmersearch table columns.\n";
+        print "LZ4 compression enabled for kafsss_data table columns.\n";
         
     } elsif ($compress eq 'pglz') {
         # Enable pglz compression
         for my $column (@columns) {
             eval {
-                $dbh->do("ALTER TABLE af_kmersearch ALTER COLUMN $column SET STORAGE EXTENDED");
-                $dbh->do("ALTER TABLE af_kmersearch ALTER COLUMN $column SET COMPRESSION pglz");
+                $dbh->do("ALTER TABLE kafsss_data ALTER COLUMN $column SET STORAGE EXTENDED");
+                $dbh->do("ALTER TABLE kafsss_data ALTER COLUMN $column SET COMPRESSION pglz");
             };
             if ($@) {
                 print STDERR "Warning: Failed to set pglz compression for column '$column': $@\n";
             }
         }
-        print "PGLZ compression enabled for af_kmersearch table columns.\n";
+        print "PGLZ compression enabled for kafsss_data table columns.\n";
         
     } elsif ($compress eq 'disable') {
         # Disable compression
         for my $column (@columns) {
             eval {
-                $dbh->do("ALTER TABLE af_kmersearch ALTER COLUMN $column SET STORAGE EXTERNAL");
+                $dbh->do("ALTER TABLE kafsss_data ALTER COLUMN $column SET STORAGE EXTERNAL");
             };
             if ($@) {
                 print STDERR "Warning: Failed to disable compression for column '$column': $@\n";
             }
         }
-        print "Compression disabled for af_kmersearch table columns.\n";
+        print "Compression disabled for kafsss_data table columns.\n";
     }
 }
 
@@ -1350,7 +1350,7 @@ sub open_input_file {
         print "Using blastdbcmd for BLAST database: $filename\n" if $verbose;
         
         # BLAST nucleotide database
-        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '1000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
+        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '10000000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
         return $fh;
     }
     

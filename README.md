@@ -1,10 +1,10 @@
-# af_kmersearch suite
+# kafsss: K-mer based Alignment-Free Splitted Sequence Search
 
 A comprehensive toolkit for DNA sequence analysis using k-mer similarity search with PostgreSQL and the pg_kmersearch extension.
 
 ## Features
 
-- **Database Management**: Store and index multi-FASTA sequences in PostgreSQL with compression and partitioning
+- **Database Management**: Store and index multi-FASTA sequences in PostgreSQL with compression and subsetting
 - **High-Performance Search**: Fast k-mer similarity search with configurable parameters and parallel processing
 - **Asynchronous Processing**: Job-based search with SQLite job management, automatic polling, and resume capability
 - **Load Balancing**: Multi-server support with failover, retry logic, and round-robin distribution
@@ -21,11 +21,11 @@ make
 sudo make install
 
 # Custom installation prefix
-make PREFIX=/opt/af_kmersearch
-sudo make install PREFIX=/opt/af_kmersearch
+make PREFIX=/opt/kafsss
+sudo make install PREFIX=/opt/kafsss
 ```
 
-**Note**: Server scripts (`af_kmersearchserver.pl`, `.fcgi`, `.psgi`) are not installed by make and should be manually deployed to appropriate web server locations.
+**Note**: Server scripts (`kafsssearchserver.pl`, `.fcgi`, `.psgi`) are not installed by make and should be manually deployed to appropriate web server locations.
 
 ## Quick Start
 
@@ -34,19 +34,19 @@ sudo make install PREFIX=/opt/af_kmersearch
 perl check_dependencies.pl
 
 # Store sequences in database
-af_kmerstore sequences.fasta mydb
+kafssstore sequences.fasta mydb
 
 # Create search indexes  
-af_kmerindex --mode=create mydb
+kafssindex --mode=create mydb
 
 # Search sequences locally
-af_kmersearch --db=mydb query.fasta results.tsv
+kafsssearch --db=mydb query.fasta results.tsv
 
 # Or use remote server with asynchronous job management
-af_kmersearchclient --server=localhost --db=mydb query.fasta results.tsv
+kafsssearchclient --server=localhost --db=mydb query.fasta results.tsv
 
 # Multiple servers with load balancing
-af_kmersearchclient --server="server1,server2,server3" --db=mydb query.fasta results.tsv
+kafsssearchclient --server="server1,server2,server3" --db=mydb query.fasta results.tsv
 
 # Check server metadata and configuration
 curl http://localhost:8080/metadata
@@ -55,5 +55,5 @@ curl http://localhost:8080/metadata
 ## Documentation
 
 See detailed documentation in the `doc/` directory:
-- **English**: [doc/af_kmersearch.en.md](doc/af_kmersearch.en.md)
-- **日本語**: [doc/af_kmersearch.ja.md](doc/af_kmersearch.ja.md)
+- **English**: [doc/kafsss.en.md](doc/kafsss.en.md)
+- **日本語**: [doc/kafsss.ja.md](doc/kafsss.ja.md)

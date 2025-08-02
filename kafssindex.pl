@@ -64,7 +64,7 @@ if ($help) {
 
 # Check required arguments
 if (@ARGV != 1) {
-    die "Usage: af_kmerindex [options] database_name\n" .
+    die "Usage: kafssindex [options] database_name\n" .
         "Use --help for detailed usage information.\n";
 }
 
@@ -81,7 +81,7 @@ die "max_appearance_nrow must be non-negative\n" unless $max_appearance_nrow >= 
 die "occur_bitlen must be between 0 and 16\n" unless $occur_bitlen >= 0 && $occur_bitlen <= 16;
 die "numthreads must be non-negative\n" unless $numthreads >= 0;
 
-print "af_kmerindex version $VERSION\n";
+print "kafssindex version $VERSION\n";
 print "Database: $database_name\n";
 print "Host: $host\n";
 print "Port: $port\n";
@@ -177,11 +177,11 @@ exit 0;
 
 sub print_help {
     print <<EOF;
-af_kmerindex version $VERSION
+kafssindex version $VERSION
 
-Usage: af_kmerindex [options] database_name
+Usage: kafssindex [options] database_name
 
-Create or drop GIN indexes on af_kmersearch table.
+Create or drop GIN indexes on kafsss_data table.
 
 Required arguments:
   database_name     PostgreSQL database name
@@ -212,15 +212,15 @@ Environment variables:
   PGPASSWORD       PostgreSQL password
 
 Examples:
-  af_kmerindex --mode=create mydb
-  af_kmerindex --mode=drop mydb
-  af_kmerindex --mode=create --tablespace=fast_ssd mydb
-  af_kmerindex --mode=create --kmer_size=16 mydb
-  af_kmerindex --mode=create --maintenanceworkingmemory=64GB mydb
-  af_kmerindex --mode=create --kmer_size=32 --maintenanceworkingmemory=128GB --temporarybuffer=1GB mydb
-  af_kmerindex --mode=create --workingmemory=32GB --maintenanceworkingmemory=128GB --tablespace=fast_ssd mydb
-  af_kmerindex --mode=create --max_appearance_rate=0.3 --max_appearance_nrow=500 mydb
-  af_kmerindex --mode=create --occur_bitlen=12 --numthreads=8 mydb
+  kafssindex --mode=create mydb
+  kafssindex --mode=drop mydb
+  kafssindex --mode=create --tablespace=fast_ssd mydb
+  kafssindex --mode=create --kmer_size=16 mydb
+  kafssindex --mode=create --maintenanceworkingmemory=64GB mydb
+  kafssindex --mode=create --kmer_size=32 --maintenanceworkingmemory=128GB --temporarybuffer=1GB mydb
+  kafssindex --mode=create --workingmemory=32GB --maintenanceworkingmemory=128GB --tablespace=fast_ssd mydb
+  kafssindex --mode=create --max_appearance_rate=0.3 --max_appearance_nrow=500 mydb
+  kafssindex --mode=create --occur_bitlen=12 --numthreads=8 mydb
 
 EOF
 }
@@ -239,25 +239,25 @@ sub verify_database_structure {
     die "pg_kmersearch extension is not installed in database '$database_name'\n" 
         unless $ext_exists;
     
-    # Check if af_kmersearch table exists
+    # Check if kafsss_data table exists
     $sth = $dbh->prepare(<<SQL);
 SELECT COUNT(*)
 FROM information_schema.tables 
-WHERE table_name = 'af_kmersearch'
+WHERE table_name = 'kafsss_data'
 SQL
     $sth->execute();
     my ($table_count) = $sth->fetchrow_array();
     $sth->finish();
     
-    die "Table 'af_kmersearch' does not exist in database '$database_name'\n" 
+    die "Table 'kafsss_data' does not exist in database '$database_name'\n" 
         unless $table_count > 0;
     
     # Check if required columns exist with correct types
     $sth = $dbh->prepare(<<SQL);
 SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
 FROM information_schema.columns 
-WHERE table_name = 'af_kmersearch'
-AND column_name IN ('seq', 'part', 'seqid')
+WHERE table_name = 'kafsss_data'
+AND column_name IN ('seq', 'subset', 'seqid')
 ORDER BY column_name
 SQL
     $sth->execute();
@@ -268,10 +268,10 @@ SQL
     }
     $sth->finish();
     
-    die "Required columns not found in table 'af_kmersearch'\n"
-        unless exists $columns{seq} && exists $columns{part} && exists $columns{seqid};
+    die "Required columns not found in table 'kafsss_data'\n"
+        unless exists $columns{seq} && exists $columns{subset} && exists $columns{seqid};
     
-    die "Column 'part' must be ARRAY type\n" unless $columns{part} eq 'ARRAY';
+    die "Column 'subset' must be ARRAY type\n" unless $columns{subset} eq 'ARRAY';
     die "Column 'seqid' must be ARRAY type\n" unless $columns{seqid} eq 'ARRAY';
     die "Column 'seq' must be DNA2 or DNA4 type\n" 
         unless lc($columns{seq}) eq 'dna2' || lc($columns{seq}) eq 'dna4';
@@ -297,7 +297,7 @@ sub create_indexes {
         perform_highfreq_analysis($dbh);
         
         # Check if any high-frequency k-mers were found
-        my $count_sth = $dbh->prepare("SELECT COUNT(*) FROM kmersearch_highfreq_kmer WHERE table_oid = 'af_kmersearch'::regclass AND column_name = 'seq'");
+        my $count_sth = $dbh->prepare("SELECT COUNT(*) FROM kmersearch_highfreq_kmer WHERE table_oid = 'kafsss_data'::regclass AND column_name = 'seq'");
         $count_sth->execute();
         ($highfreq_kmer_count) = $count_sth->fetchrow_array();
         $count_sth->finish();
@@ -337,12 +337,12 @@ sub create_indexes {
     my $existing_indexes = get_existing_indexes($dbh);
     
     # Create seq column GIN index
-    my $seq_index_name = 'idx_af_kmersearch_seq_gin';
+    my $seq_index_name = 'idx_kafsss_data_seq_gin';
     if (exists $existing_indexes->{$seq_index_name}) {
         print "Index '$seq_index_name' already exists, skipping...\n";
     } else {
         print "Creating index '$seq_index_name'...\n";
-        my $seq_sql = "CREATE INDEX $seq_index_name ON af_kmersearch USING gin(seq)";
+        my $seq_sql = "CREATE INDEX $seq_index_name ON kafsss_data USING gin(seq)";
         if ($tablespace) {
             $seq_sql .= " TABLESPACE \"$tablespace\"";
         }
@@ -356,33 +356,33 @@ sub create_indexes {
         }
     }
     
-    # Create part column GIN index
-    my $part_index_name = 'idx_af_kmersearch_part_gin';
-    if (exists $existing_indexes->{$part_index_name}) {
-        print "Index '$part_index_name' already exists, skipping...\n";
+    # Create subset column GIN index
+    my $subset_index_name = 'idx_kafsss_data_subset_gin';
+    if (exists $existing_indexes->{$subset_index_name}) {
+        print "Index '$subset_index_name' already exists, skipping...\n";
     } else {
-        print "Creating index '$part_index_name'...\n";
-        my $part_sql = "CREATE INDEX $part_index_name ON af_kmersearch USING gin(part)";
+        print "Creating index '$subset_index_name'...\n";
+        my $subset_sql = "CREATE INDEX $subset_index_name ON kafsss_data USING gin(subset)";
         if ($tablespace) {
-            $part_sql .= " TABLESPACE \"$tablespace\"";
+            $subset_sql .= " TABLESPACE \"$tablespace\"";
         }
         
         eval {
-            $dbh->do($part_sql);
-            print "Index '$part_index_name' created successfully.\n";
+            $dbh->do($subset_sql);
+            print "Index '$subset_index_name' created successfully.\n";
         };
         if ($@) {
-            die "Failed to create index '$part_index_name': $@\n";
+            die "Failed to create index '$subset_index_name': $@\n";
         }
     }
     
     # Create seqid column GIN index
-    my $seqid_index_name = 'idx_af_kmersearch_seqid_gin';
+    my $seqid_index_name = 'idx_kafsss_data_seqid_gin';
     if (exists $existing_indexes->{$seqid_index_name}) {
         print "Index '$seqid_index_name' already exists, skipping...\n";
     } else {
         print "Creating index '$seqid_index_name'...\n";
-        my $seqid_sql = "CREATE INDEX $seqid_index_name ON af_kmersearch USING gin(seqid)";
+        my $seqid_sql = "CREATE INDEX $seqid_index_name ON kafsss_data USING gin(seqid)";
         if ($tablespace) {
             $seqid_sql .= " TABLESPACE \"$tablespace\"";
         }
@@ -401,7 +401,7 @@ sub create_indexes {
         free_cache($dbh, $pg_version);
     }
     
-    # Update af_kmersearch_meta table
+    # Update kafsss_meta table
     update_meta_table($dbh);
     
     print "All indexes created successfully.\n";
@@ -418,19 +418,19 @@ sub drop_indexes {
     # Get existing indexes
     my $existing_indexes = get_existing_indexes($dbh);
     
-    # List of indexes to drop (for seq, part, and seqid columns)
+    # List of indexes to drop (for seq, subset, and seqid columns)
     my @indexes_to_drop = ();
     
-    # Find all indexes on seq, part, and seqid columns
+    # Find all indexes on seq, subset, and seqid columns
     for my $index_name (keys %$existing_indexes) {
         my $index_info = $existing_indexes->{$index_name};
-        if ($index_info->{columns} =~ /\b(seq|part|seqid)\b/) {
+        if ($index_info->{columns} =~ /\b(seq|subset|seqid)\b/) {
             push @indexes_to_drop, $index_name;
         }
     }
     
     if (@indexes_to_drop == 0) {
-        print "No indexes found on 'seq', 'part', or 'seqid' columns.\n";
+        print "No indexes found on 'seq', 'subset', or 'seqid' columns.\n";
         return;
     }
     
@@ -446,7 +446,7 @@ sub drop_indexes {
         }
     }
     
-    # Clear af_kmersearch_meta table
+    # Clear kafsss_meta table
     clear_meta_table($dbh);
     
     print "Index dropping completed.\n";
@@ -464,7 +464,7 @@ FROM pg_indexes i
 JOIN pg_class c ON c.relname = i.indexname
 JOIN pg_index idx ON idx.indexrelid = c.oid
 JOIN pg_attribute a ON a.attrelid = idx.indrelid AND a.attnum = ANY(idx.indkey)
-WHERE i.tablename = 'af_kmersearch'
+WHERE i.tablename = 'kafsss_data'
 GROUP BY i.indexname, i.indexdef
 ORDER BY i.indexname
 SQL
@@ -639,7 +639,7 @@ sub perform_highfreq_analysis {
     print "Performing high-frequency k-mer analysis...\n";
     
     eval {
-        my $sth = $dbh->prepare("SELECT kmersearch_perform_highfreq_analysis('af_kmersearch', 'seq')");
+        my $sth = $dbh->prepare("SELECT kmersearch_perform_highfreq_analysis('kafsss_data', 'seq')");
         $sth->execute();
         my ($result) = $sth->fetchrow_array();
         $sth->finish();
@@ -707,30 +707,30 @@ sub validate_database_permissions {
     # Check table permissions based on mode
     if ($mode eq 'create') {
         # Check if user can create indexes
-        $sth = $dbh->prepare("SELECT has_table_privilege(?, 'af_kmersearch', 'SELECT, INSERT, UPDATE, DELETE')");
+        $sth = $dbh->prepare("SELECT has_table_privilege(?, 'kafsss_data', 'SELECT, INSERT, UPDATE, DELETE')");
         $sth->execute($username);
         my $has_table_perm = $sth->fetchrow_array();
         $sth->finish();
         
         unless ($has_table_perm) {
-            die "Error: User '$username' does not have sufficient permissions on af_kmersearch table.\n" .
+            die "Error: User '$username' does not have sufficient permissions on kafsss_data table.\n" .
                 "Please grant permissions:\n" .
                 "  sudo -u postgres psql -d " . $dbh->{pg_db} . "\n" .
-                "  GRANT SELECT, INSERT, UPDATE, DELETE ON af_kmersearch TO $username;\n" .
+                "  GRANT SELECT, INSERT, UPDATE, DELETE ON kafsss_data TO $username;\n" .
                 "  \\q\n";
         }
     } elsif ($mode eq 'drop') {
         # Check if user can drop indexes
-        $sth = $dbh->prepare("SELECT has_table_privilege(?, 'af_kmersearch', 'SELECT')");
+        $sth = $dbh->prepare("SELECT has_table_privilege(?, 'kafsss_data', 'SELECT')");
         $sth->execute($username);
         my $has_table_perm = $sth->fetchrow_array();
         $sth->finish();
         
         unless ($has_table_perm) {
-            die "Error: User '$username' does not have SELECT permission on af_kmersearch table.\n" .
+            die "Error: User '$username' does not have SELECT permission on kafsss_data table.\n" .
                 "Please grant permissions:\n" .
                 "  sudo -u postgres psql -d " . $dbh->{pg_db} . "\n" .
-                "  GRANT SELECT ON af_kmersearch TO $username;\n" .
+                "  GRANT SELECT ON kafsss_data TO $username;\n" .
                 "  \\q\n";
         }
     }
@@ -744,7 +744,7 @@ sub validate_database_schema {
     print "Validating database schema...\n";
     
     # Check if required tables exist
-    my @required_tables = ('af_kmersearch_meta', 'af_kmersearch');
+    my @required_tables = ('kafsss_meta', 'kafsss_data');
     
     for my $table (@required_tables) {
         my $sth = $dbh->prepare("SELECT 1 FROM information_schema.tables WHERE table_name = ?");
@@ -768,7 +768,7 @@ sub undo_highfreq_analysis {
     print "Undoing high-frequency k-mer analysis...\n";
     
     eval {
-        my $sth = $dbh->prepare("SELECT kmersearch_undo_highfreq_analysis('af_kmersearch', 'seq')");
+        my $sth = $dbh->prepare("SELECT kmersearch_undo_highfreq_analysis('kafsss_data', 'seq')");
         $sth->execute();
         my ($result) = $sth->fetchrow_array();
         $sth->finish();
@@ -789,13 +789,13 @@ sub load_cache {
     eval {
         if ($pg_version >= 18) {
             # PostgreSQL 18+: Use parallel cache
-            my $sth = $dbh->prepare("SELECT kmersearch_parallel_highfreq_kmer_cache_load('af_kmersearch', 'seq')");
+            my $sth = $dbh->prepare("SELECT kmersearch_parallel_highfreq_kmer_cache_load('kafsss_data', 'seq')");
             $sth->execute();
             $sth->finish();
             print "Parallel k-mer cache loaded.\n";
         } else {
             # PostgreSQL 16-17: Use global cache
-            my $sth = $dbh->prepare("SELECT kmersearch_highfreq_kmer_cache_load('af_kmersearch', 'seq')");
+            my $sth = $dbh->prepare("SELECT kmersearch_highfreq_kmer_cache_load('kafsss_data', 'seq')");
             $sth->execute();
             $sth->finish();
             print "Global k-mer cache loaded.\n";
@@ -815,13 +815,13 @@ sub free_cache {
     eval {
         if ($pg_version >= 18) {
             # PostgreSQL 18+: Use parallel cache
-            my $sth = $dbh->prepare("SELECT kmersearch_parallel_highfreq_kmer_cache_free('af_kmersearch', 'seq')");
+            my $sth = $dbh->prepare("SELECT kmersearch_parallel_highfreq_kmer_cache_free('kafsss_data', 'seq')");
             $sth->execute();
             $sth->finish();
             print "Parallel k-mer cache freed.\n";
         } else {
             # PostgreSQL 16-17: Use global cache
-            my $sth = $dbh->prepare("SELECT kmersearch_highfreq_kmer_cache_free('af_kmersearch', 'seq')");
+            my $sth = $dbh->prepare("SELECT kmersearch_highfreq_kmer_cache_free('kafsss_data', 'seq')");
             $sth->execute();
             $sth->finish();
             print "Global k-mer cache freed.\n";
@@ -836,11 +836,11 @@ sub free_cache {
 sub update_meta_table {
     my ($dbh) = @_;
     
-    print "Updating af_kmersearch_meta table...\n";
+    print "Updating kafsss_meta table...\n";
     
     eval {
         my $update_sth = $dbh->prepare(<<SQL);
-UPDATE af_kmersearch_meta SET 
+UPDATE kafsss_meta SET 
     kmer_size = ?, 
     max_appearance_rate = ?, 
     max_appearance_nrow = ?, 
@@ -852,18 +852,18 @@ SQL
     };
     
     if ($@) {
-        die "Failed to update af_kmersearch_meta table: $@\n";
+        die "Failed to update kafsss_meta table: $@\n";
     }
 }
 
 sub clear_meta_table {
     my ($dbh) = @_;
     
-    print "Clearing af_kmersearch_meta table...\n";
+    print "Clearing kafsss_meta table...\n";
     
     eval {
         my $update_sth = $dbh->prepare(<<SQL);
-UPDATE af_kmersearch_meta SET 
+UPDATE kafsss_meta SET 
     kmer_size = NULL, 
     max_appearance_rate = NULL, 
     max_appearance_nrow = NULL, 
@@ -871,10 +871,10 @@ UPDATE af_kmersearch_meta SET
 SQL
         $update_sth->execute();
         $update_sth->finish();
-        print "Metadata cleared from af_kmersearch_meta table.\n";
+        print "Metadata cleared from kafsss_meta table.\n";
     };
     
     if ($@) {
-        print STDERR "Warning: Failed to clear af_kmersearch_meta table: $@\n";
+        print STDERR "Warning: Failed to clear kafsss_meta table: $@\n";
     }
 }

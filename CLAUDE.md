@@ -4,23 +4,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-The af_kmersearch suite is a comprehensive Perl-based toolkit for DNA sequence analysis using k-mer similarity search with PostgreSQL and the pg_kmersearch extension. The system consists of command-line tools for sequence storage, indexing, searching, and web servers for remote API access with asynchronous job processing.
+The kafsss (K-mer based Alignment-Free Splitted Sequence Search) suite is a comprehensive Perl-based toolkit for DNA sequence analysis using k-mer similarity search with PostgreSQL and the pg_kmersearch extension. The system consists of command-line tools for sequence storage, indexing, searching, and web servers for remote API access with asynchronous job processing.
 
 ## Core Components
 
 ### Command-Line Tools
-- `af_kmerstore` - Store multi-FASTA sequences in PostgreSQL database
-- `af_kmerindex` - Create and manage k-mer search indexes 
-- `af_kmersearch` - Local sequence similarity search
-- `af_kmersearchclient` - Remote API client with job management
-- `af_kmerpart` - Database partition management utilities (add/remove partition labels)
-- `af_kmerdbinfo` - Database information and statistics
+- `kafssstore` - Store multi-FASTA sequences in PostgreSQL database
+- `kafssindex` - Create and manage k-mer search indexes 
+- `kafsssearch` - Local sequence similarity search
+- `kafsssearchclient` - Remote API client with job management
+- `kafsssubset` - Database subset management utilities (add/remove subset labels)
+- `kafssdbinfo` - Database information and statistics
+- `kafssdedup` - Sequence deduplication tool
+- `kafssfreq` - K-mer frequency analysis tool
 - `calcsegment` - Sequence segmentation calculations (utility planned)
 
 ### Server Components
-- `af_kmersearchserver.pl` - Standalone HTTP server
-- `af_kmersearchserver.fcgi` - FastCGI server implementation
-- `af_kmersearchserver.psgi` - PSGI/Plack server implementation
+- `kafsssearchserver.pl` - Standalone HTTP server
+- `kafsssearchserver.fcgi` - FastCGI server implementation
+- `kafsssearchserver.psgi` - PSGI/Plack server implementation
 
 ### Architecture
 - **Database Layer**: PostgreSQL with pg_kmersearch extension for k-mer indexing
@@ -37,10 +39,10 @@ make
 sudo make install
 
 # Custom installation prefix
-make PREFIX=/opt/af_kmersearch
-sudo make install PREFIX=/opt/af_kmersearch
+make PREFIX=/opt/kafsss
+sudo make install PREFIX=/opt/kafsss
 
-# Note: Server scripts (af_kmersearchserver.pl, .fcgi, .psgi) are not installed by make
+# Note: Server scripts (kafsssearchserver.pl, .fcgi, .psgi) are not installed by make
 # They should be manually deployed to appropriate web server locations
 ```
 
@@ -72,7 +74,7 @@ CREATE EXTENSION IF NOT EXISTS pg_kmersearch;
 sudo -u postgres psql
 ALTER USER yourusername SUPERUSER;
 \q
-# Run af_kmerstore, then revoke:
+# Run kafssstore, then revoke:
 # ALTER USER yourusername NOSUPERUSER;
 ```
 
@@ -96,24 +98,24 @@ cpanm DBI DBD::Pg DBD::SQLite JSON LWP::UserAgent HTTP::Request::Common \
 ### Testing the Tools
 ```bash
 # Basic workflow test (ensure database setup is complete first)
-af_kmerstore sampledata.fasta testdb
-af_kmerindex --mode=create testdb
-af_kmersearch --db=testdb sampledata.fasta results.tsv
+kafssstore sampledata.fasta testdb
+kafssindex --mode=create testdb
+kafsssearch --db=testdb sampledata.fasta results.tsv
 
 # Test server functionality (asynchronous job processing)
-perl af_kmersearchserver.pl --listen-port=8080 &
-af_kmersearchclient --server=localhost --db=testdb sampledata.fasta results.tsv
+perl kafsssearchserver.pl --listen-port=8080 &
+kafsssearchclient --server=localhost --db=testdb sampledata.fasta results.tsv
 
 # Test multi-server load balancing
-af_kmersearchclient --server="server1,server2,server3" --db=testdb sampledata.fasta results.tsv
+kafsssearchclient --server="server1,server2,server3" --db=testdb sampledata.fasta results.tsv
 
 # Test server metadata endpoint
 curl http://localhost:8080/metadata
 
-# Test partition management
-af_kmerpart --partition=bacteria accessions.txt testdb
-af_kmerpart --mode=del --partition=bacteria accessions.txt testdb
-af_kmerpart --mode=del --partition=all all testdb
+# Test subset management
+kafsssubset --subset=bacteria accessions.txt testdb
+kafsssubset --mode=del --subset=bacteria accessions.txt testdb
+kafsssubset --mode=del --subset=all all testdb
 ```
 
 ### Code Analysis
@@ -136,16 +138,16 @@ grep -n "pg_kmersearch" *.pl
 
 ### Server Configuration  
 - Default ports: 8080 (HTTP), various for FastCGI/PSGI
-- SQLite job database: `./af_kmersearchserver.sqlite`
+- SQLite job database: `./kafsssearchserver.sqlite`
 - Configurable limits: max jobs, timeouts, result retention
 - API endpoints: `/search`, `/result`, `/status`, `/cancel`, `/metadata` (GET)
 
 ### Performance Parameters
-- K-mer size: Default 8, configurable via `--kmer_size` in af_kmerindex
-- Search modes: minimum, normal, maximum (affects sensitivity/speed) in af_kmersearch
+- K-mer size: Default 8, configurable via `--kmer_size` in kafssindex
+- Search modes: minimum, normal, maximum (affects sensitivity/speed) in kafsssearch
 - Thread counts: Configurable for parallel processing (`--numthreads`)
 - Memory settings: Working memory for index operations (`--workingmemory`)
-- Compression: Database compression options (lz4, pglz, disable) in af_kmerstore
+- Compression: Database compression options (lz4, pglz, disable) in kafssstore
 - Input formats: FASTA, compressed files (.gz, .bz2, .xz, .zst), BLAST databases, wildcards
 - Sequence splitting: `--ovllen` must be less than half of `--minsplitlen` to prevent overlap conflicts
 - **Database Setup**: Users must have CREATEDB permission and pg_kmersearch extension must be available

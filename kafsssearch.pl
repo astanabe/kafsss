@@ -27,7 +27,7 @@ my $host = $default_host;
 my $port = $default_port;
 my $username = $default_user;
 my $database = '';
-my $partition = '';
+my $subset = '';
 my $maxnseq = $default_maxnseq;
 my $minscore = undef;
 my $minpsharedkey = $default_minpsharedkey;
@@ -42,7 +42,7 @@ GetOptions(
     'port=i' => \$port,
     'username=s' => \$username,
     'db=s' => \$database,
-    'partition=s' => \$partition,
+    'subset=s' => \$subset,
     'maxnseq=i' => \$maxnseq,
     'minscore=i' => \$minscore,
     'minpsharedkey=f' => \$minpsharedkey,
@@ -60,7 +60,7 @@ if ($help) {
 
 # Check required arguments
 if (@ARGV < 2) {
-    die "Usage: af_kmersearch [options] input_file(s) output_file\n" .
+    die "Usage: kafsssearch [options] input_file(s) output_file\n" .
         "Use --help for detailed usage information.\n";
 }
 
@@ -89,7 +89,7 @@ if (!$normalized_mode) {
 }
 $mode = $normalized_mode;
 
-print "af_kmersearch version $VERSION\n";
+print "kafsssearch version $VERSION\n";
 print "Input files (" . scalar(@input_files) . "):\n";
 for my $i (0..$#input_files) {
     print "  " . ($i + 1) . ". $input_files[$i]\n";
@@ -99,7 +99,7 @@ print "Database: $database\n";
 print "Host: $host\n";
 print "Port: $port\n";
 print "Username: $username\n";
-print "Partition: " . ($partition ? $partition : 'all') . "\n";
+print "Subset: " . ($subset ? $subset : 'all') . "\n";
 print "Max sequences: $maxnseq\n";
 print "Min score: " . (defined $minscore ? $minscore : 'default') . "\n";
 print "Min shared key rate: $minpsharedkey\n";
@@ -145,7 +145,7 @@ validate_database_schema($dbh);
 # Verify database structure
 verify_database_structure($dbh);
 
-# Get all metadata from af_kmersearch_meta table
+# Get all metadata from kafsss_meta table
 my $metadata = get_metadata_from_meta($dbh);
 print "Retrieved metadata - k-mer size: $metadata->{kmer_size}, ovllen: $metadata->{ovllen}\n";
 
@@ -283,11 +283,11 @@ exit 0;
 
 sub print_help {
     print <<EOF;
-af_kmersearch version $VERSION
+kafsssearch version $VERSION
 
-Usage: af_kmersearch [options] input_file(s) output_file
+Usage: kafsssearch [options] input_file(s) output_file
 
-Search DNA sequences from multiple sources against af_kmersearch database using k-mer similarity.
+Search DNA sequences from multiple sources against kafsssearch database using k-mer similarity.
 
 Required arguments:
   input_file(s)     Input FASTA file(s), patterns, or databases:
@@ -305,7 +305,7 @@ Other options:
   --host=HOST       PostgreSQL server host (default: \$PGHOST or localhost)
   --port=PORT       PostgreSQL server port (default: \$PGPORT or 5432)
   --username=USER   PostgreSQL username (default: \$PGUSER or current user)
-  --partition=NAME  Limit search to specific partition (optional)
+  --subset=NAME  Limit search to specific subset (optional)
   --maxnseq=INT     Maximum number of results per query (default: 1000)
   --minscore=INT    Minimum score threshold (optional, uses kmersearch.min_score GUC variable)
   --minpsharedkey=REAL  Minimum percentage of shared keys (0.0-1.0, default: 0.9)
@@ -330,31 +330,31 @@ Output format:
 
 Examples:
   # Single file
-  af_kmersearch --db=mydb query.fasta results.tsv
+  kafsssearch --db=mydb query.fasta results.tsv
   
   # Multiple files
-  af_kmersearch --db=mydb file1.fasta file2.fasta results.tsv
+  kafsssearch --db=mydb file1.fasta file2.fasta results.tsv
   
   # Wildcard pattern (use quotes to prevent shell expansion)
-  af_kmersearch --db=mydb 'queries/*.fasta' results.tsv
+  kafsssearch --db=mydb 'queries/*.fasta' results.tsv
   
   # Compressed files
-  af_kmersearch --db=mydb query.fasta.gz results.tsv
-  af_kmersearch --db=mydb 'data/*.fasta.bz2' results.tsv
+  kafsssearch --db=mydb query.fasta.gz results.tsv
+  kafsssearch --db=mydb 'data/*.fasta.bz2' results.tsv
   
   # BLAST database
-  af_kmersearch --db=mydb nr results.tsv
+  kafsssearch --db=mydb nr results.tsv
   
   # Mixed sources
-  af_kmersearch --db=mydb file1.fasta 'data/*.gz' blastdb results.tsv
+  kafsssearch --db=mydb file1.fasta 'data/*.gz' blastdb results.tsv
   
   # With options
-  af_kmersearch --db=mydb --partition=bacteria 'queries/*.fasta' results.tsv
-  af_kmersearch --db=mydb --maxnseq=500 --minscore=10 query.fasta results.tsv
-  af_kmersearch --db=mydb --numthreads=4 --mode=maximum 'data/*.fasta' results.tsv
+  kafsssearch --db=mydb --subset=bacteria 'queries/*.fasta' results.tsv
+  kafsssearch --db=mydb --maxnseq=500 --minscore=10 query.fasta results.tsv
+  kafsssearch --db=mydb --numthreads=4 --mode=maximum 'data/*.fasta' results.tsv
   
   # Standard input
-  cat query.fasta | af_kmersearch --db=mydb stdin stdout > results.tsv
+  cat query.fasta | kafsssearch --db=mydb stdin stdout > results.tsv
 
 EOF
 }
@@ -373,17 +373,17 @@ sub verify_database_structure {
     die "pg_kmersearch extension is not installed in database '$database'\n" 
         unless $ext_exists;
     
-    # Check if af_kmersearch table exists
+    # Check if kafsssearch table exists
     $sth = $dbh->prepare(<<SQL);
 SELECT COUNT(*)
 FROM information_schema.tables 
-WHERE table_name = 'af_kmersearch'
+WHERE table_name = 'kafsss_data'
 SQL
     $sth->execute();
     my ($table_count) = $sth->fetchrow_array();
     $sth->finish();
     
-    die "Table 'af_kmersearch' does not exist in database '$database'\n" 
+    die "Table 'kafsss_data' does not exist in database '$database'\n" 
         unless $table_count > 0;
     
     print "Database structure verified.\n";
@@ -412,7 +412,7 @@ sub open_input_file {
         print "Using blastdbcmd for BLAST database: $filename\n" if $verbose;
         
         # BLAST nucleotide database
-        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '1000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
+        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '10000000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
         return $fh;
     }
     
@@ -553,7 +553,7 @@ sub process_sequences_parallel_streaming {
         if ($fasta_entry && scalar(keys %active_children) < $numthreads) {
             $query_count++;
             my $global_query_number = $query_offset + $query_count;
-            my ($temp_fh, $temp_file) = tempfile("af_kmersearch_$$" . "_$global_query_number" . "_XXXXXX", UNLINK => 0);
+            my ($temp_fh, $temp_file) = tempfile("kafsssearch_$$" . "_$global_query_number" . "_XXXXXX", UNLINK => 0);
             close($temp_fh);
             
             my $pid = fork();
@@ -812,23 +812,23 @@ sub search_sequence_with_validation {
     if ($search_mode eq 'maximum') {
         $inner_sql = <<SQL;
 SELECT seq, seqid
-FROM af_kmersearch
+FROM kafsssearch
 WHERE seq =% ?
 SQL
     } else {
         $inner_sql = <<SQL;
 SELECT seq, seqid
-FROM af_kmersearch
+FROM kafsssearch
 WHERE seq =% ?
 SQL
     }
 
     my @params = ($sequence);
     
-    # Add partition condition if specified
-    if ($partition) {
-        $inner_sql .= " AND ? = ANY(part)";
-        push @params, $partition;
+    # Add subset condition if specified
+    if ($subset) {
+        $inner_sql .= " AND ? = ANY(subset)";
+        push @params, $subset;
     }
     
     # Add ORDER BY and LIMIT to inner query (use rawscore for performance)
@@ -987,7 +987,7 @@ sub get_metadata_from_meta {
     
     my $sth = $dbh->prepare(<<SQL);
 SELECT ovllen, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
-FROM af_kmersearch_meta LIMIT 1
+FROM kafsss_meta LIMIT 1
 SQL
     
     $sth->execute();
@@ -995,7 +995,7 @@ SQL
     $sth->finish();
     
     if (!defined $ovllen || !defined $kmer_size) {
-        die "No metadata found in af_kmersearch_meta table. Please run af_kmerindex to create indexes first.\n";
+        die "No metadata found in kafsss_meta table. Please run af_kmerindex to create indexes first.\n";
     }
     
     return {
@@ -1010,8 +1010,8 @@ SQL
 sub get_ovllen_from_meta {
     my ($dbh) = @_;
     
-    # Query af_kmersearch_meta table to get ovllen value
-    my $sth = $dbh->prepare("SELECT ovllen FROM af_kmersearch_meta LIMIT 1");
+    # Query kafsss_meta table to get ovllen value
+    my $sth = $dbh->prepare("SELECT ovllen FROM kafsss_meta LIMIT 1");
     my $ovllen;
     eval {
         $sth->execute();
@@ -1021,12 +1021,12 @@ sub get_ovllen_from_meta {
         if (defined $ovllen) {
             return $ovllen;
         } else {
-            die "No ovllen value found in af_kmersearch_meta table\n";
+            die "No ovllen value found in kafsss_meta table\n";
         }
     };
     
     if ($@) {
-        die "Failed to retrieve ovllen from af_kmersearch_meta table: $@\n";
+        die "Failed to retrieve ovllen from kafsss_meta table: $@\n";
     }
     
     return $ovllen;
@@ -1035,8 +1035,8 @@ sub get_ovllen_from_meta {
 sub get_kmer_size_from_meta {
     my ($dbh) = @_;
     
-    # Query af_kmersearch_meta table to get kmer_size value
-    my $sth = $dbh->prepare("SELECT kmer_size FROM af_kmersearch_meta LIMIT 1");
+    # Query kafsss_meta table to get kmer_size value
+    my $sth = $dbh->prepare("SELECT kmer_size FROM kafsss_meta LIMIT 1");
     my $kmer_size;
     eval {
         $sth->execute();
@@ -1051,7 +1051,7 @@ sub get_kmer_size_from_meta {
     };
     
     if ($@) {
-        die "Failed to retrieve kmer_size from af_kmersearch_meta table: $@\n";
+        die "Failed to retrieve kmer_size from kafsss_meta table: $@\n";
     }
     
     return $kmer_size;
@@ -1111,7 +1111,7 @@ sub normalize_mode {
     my $normalized = $mode_aliases{lc($mode)};
     return '' unless $normalized;
     
-    # All modes are accepted for af_kmersearch
+    # All modes are accepted for kafsssearch
     return $normalized;
 }
 
@@ -1203,7 +1203,7 @@ sub validate_database_permissions {
     }
     
     # Check if user has SELECT permission on required tables
-    my @required_tables = ('af_kmersearch_meta', 'af_kmersearch');
+    my @required_tables = ('kafsss_meta', 'kafsss_data');
     
     for my $table (@required_tables) {
         $sth = $dbh->prepare("SELECT has_table_privilege(?, ?, 'SELECT')");
@@ -1229,7 +1229,7 @@ sub validate_database_schema {
     print "Validating database schema...\n";
     
     # Check if required tables exist
-    my @required_tables = ('af_kmersearch_meta', 'af_kmersearch');
+    my @required_tables = ('kafsss_meta', 'kafsss_data');
     
     for my $table (@required_tables) {
         my $sth = $dbh->prepare("SELECT 1 FROM information_schema.tables WHERE table_name = ?");
@@ -1245,7 +1245,7 @@ sub validate_database_schema {
     }
     
     # Check if database has k-mer indexes
-    my $sth = $dbh->prepare("SELECT 1 FROM pg_indexes WHERE tablename = 'af_kmersearch' AND indexname LIKE '%_kmer_%' LIMIT 1");
+    my $sth = $dbh->prepare("SELECT 1 FROM pg_indexes WHERE tablename = 'kafsssearch' AND indexname LIKE '%_kmer_%' LIMIT 1");
     $sth->execute();
     my $has_kmer_index = $sth->fetchrow_array();
     $sth->finish();

@@ -1,10 +1,10 @@
-# af_kmersearch suite
+# kafsss: K-mer based Alignment-Free Splitted Sequence Search
 
 pg_kmersearch拡張を使用してPostgreSQLでDNA配列の保存、管理、検索を行う包括的なツールキット。
 
 ## 概要
 
-af_kmersearch suiteは、k-mer類似性検索を使用したDNA配列解析の完全なソリューションを提供します。ツールキットは、DNA配列管理、検索操作、非同期ジョブ処理によるサーバーデプロイメントの異なる側面を処理する10のPerlスクリプトで構成されています。
+kafsss suiteは、k-mer類似性検索を使用したDNA配列解析の完全なソリューションを提供します。ツールキットは、DNA配列管理、検索操作、非同期ジョブ処理によるサーバーデプロイメントの異なる側面を処理する11のPerlスクリプトで構成されています。
 
 ## 前提条件
 
@@ -15,7 +15,7 @@ af_kmersearch suiteは、k-mer類似性検索を使用したDNA配列解析の�
 
 ### 必要なPerlモジュール
 
-#### コアデータベースツール（af_kmerstore, af_kmerindex, af_kmersearch, af_kmerpart, af_kmerdbinfo）
+#### コアデータベースツール（kafssstore, kafssindex, kafsssearch, kafsssubset, kafssdbinfo, kafssdedup, kafssfreq）
 - `DBI` - データベースアクセスインターフェース
 - `DBD::Pg` - PostgreSQLドライバ
 - `Getopt::Long` - コマンドライン引数解析
@@ -23,7 +23,7 @@ af_kmersearch suiteは、k-mer類似性検索を使用したDNA配列解析の�
 - `File::Basename` - ファイル名操作
 - `Sys::Hostname` - システムホスト名取得
 
-#### ネットワーククライアント（af_kmersearchclient）
+#### ネットワーククライアント（kafsssearchclient）
 コアモジュール（上記）に加えて：
 - `JSON` - JSON形式の処理
 - `LWP::UserAgent` - HTTPクライアント
@@ -33,7 +33,7 @@ af_kmersearch suiteは、k-mer類似性検索を使用したDNA配列解析の�
 - `Time::HiRes` - 高解像度時間関数
 - `Fcntl` - ファイル制御操作
 
-#### スタンドアローンHTTPサーバ（af_kmersearchserver.pl）
+#### スタンドアローンHTTPサーバ（kafsssearchserver.pl）
 コアモジュールに加えて：
 - `JSON` - JSON形式の処理
 - `HTTP::Server::Simple::CGI` - スタンドアローンWebサーバ
@@ -43,7 +43,7 @@ af_kmersearch suiteは、k-mer類似性検索を使用したDNA配列解析の�
 - `DBD::SQLite` - SQLiteドライバ（ジョブ管理用）
 - `Crypt::OpenSSL::Random` - 暗号学的に安全な乱数
 
-#### FastCGIサーバ（af_kmersearchserver.fcgi）
+#### FastCGIサーバ（kafsssearchserver.fcgi）
 コアモジュールに加えて：
 - `JSON` - JSON形式の処理
 - `CGI::Fast` - FastCGI実装
@@ -54,7 +54,7 @@ af_kmersearch suiteは、k-mer類似性検索を使用したDNA配列解析の�
 - `DBD::SQLite` - SQLiteドライバ（ジョブ管理用）
 - `Crypt::OpenSSL::Random` - 暗号学的に安全な乱数
 
-#### PSGIサーバ（af_kmersearchserver.psgi）
+#### PSGIサーバ（kafsssearchserver.psgi）
 コアモジュールに加えて：
 - `JSON` - JSON形式の処理
 - `Plack::Request` - PSGIリクエスト処理
@@ -69,7 +69,7 @@ af_kmersearch suiteは、k-mer類似性検索を使用したDNA配列解析の�
 
 ### データベースセットアップ
 
-af_kmersearchツールを使用する前に、PostgreSQLを適切に設定する必要があります：
+kafsssツールを使用する前に、PostgreSQLを適切に設定する必要があります：
 
 #### 1. PostgreSQLとpg_kmersearch拡張のインストール
 ```bash
@@ -106,7 +106,7 @@ CREATE EXTENSION IF NOT EXISTS pg_kmersearch;
 sudo -u postgres psql
 ALTER USER yourusername SUPERUSER;
 \q
-# af_kmerstoreを実行後、権限を取り消す：
+# kafssstoreを実行後、権限を取り消す：
 # ALTER USER yourusername NOSUPERUSER;
 ```
 
@@ -133,7 +133,7 @@ sudo yum install -y perl-App-cpanminus  # または dnf
 sudo cpanm DBI DBD::Pg Getopt::Long POSIX File::Basename Sys::Hostname
 ```
 
-#### ネットワーククライアント用（af_kmersearchclient）
+#### ネットワーククライアント用（kafsssearchclient）
 **Ubuntu/Debian:**
 ```bash
 sudo apt-get install -y \
@@ -157,7 +157,7 @@ sudo cpanm DBI DBD::Pg JSON LWP::UserAgent HTTP::Request::Common URI \
            MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
 ```
 
-#### スタンドアローンHTTPサーバ用（af_kmersearchserver.pl）
+#### スタンドアローンHTTPサーバ用（kafsssearchserver.pl）
 **Ubuntu/Debian:**
 ```bash
 sudo apt-get install -y \
@@ -181,7 +181,7 @@ sudo cpanm DBI DBD::Pg JSON HTTP::Server::Simple::CGI \
            MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
 ```
 
-#### FastCGIサーバ用（af_kmersearchserver.fcgi）
+#### FastCGIサーバ用（kafsssearchserver.fcgi）
 **Ubuntu/Debian:**
 ```bash
 sudo apt-get install -y \
@@ -205,7 +205,7 @@ sudo cpanm DBI DBD::Pg JSON CGI::Fast FCGI::ProcManager \
            MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
 ```
 
-#### PSGIサーバ用（af_kmersearchserver.psgi）
+#### PSGIサーバ用（kafsssearchserver.psgi）
 **Ubuntu/Debian:**
 ```bash
 sudo apt-get install -y \
@@ -238,22 +238,22 @@ sudo cpanm DBI DBD::Pg JSON Plack::Request Plack::Response Plack::Builder \
 perl -MCPAN -e 'install DBI, DBD::Pg, Getopt::Long, POSIX, File::Basename, Sys::Hostname'
 ```
 
-**ネットワーククライアント用（af_kmersearchclient）:**
+**ネットワーククライアント用（kafsssearchclient）:**
 ```bash
 perl -MCPAN -e 'install DBI, DBD::Pg, JSON, LWP::UserAgent, HTTP::Request::Common, URI, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
 ```
 
-**スタンドアローンHTTPサーバ用（af_kmersearchserver.pl）:**
+**スタンドアローンHTTPサーバ用（kafsssearchserver.pl）:**
 ```bash
 perl -MCPAN -e 'install DBI, DBD::Pg, JSON, HTTP::Server::Simple::CGI, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
 ```
 
-**FastCGIサーバ用（af_kmersearchserver.fcgi）:**
+**FastCGIサーバ用（kafsssearchserver.fcgi）:**
 ```bash
 perl -MCPAN -e 'install DBI, DBD::Pg, JSON, CGI::Fast, FCGI::ProcManager, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
 ```
 
-**PSGIサーバ用（af_kmersearchserver.psgi）:**
+**PSGIサーバ用（kafsssearchserver.psgi）:**
 ```bash
 perl -MCPAN -e 'install DBI, DBD::Pg, JSON, Plack::Request, Plack::Response, Plack::Builder, Plack::Handler::Starman, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
 ```
@@ -293,15 +293,15 @@ perl -MStarman -e 'print "Starman available\n"'
 
 | スクリプト | 用途 |
 |-----------|------|
-| `af_kmerstore` | FASTA配列をPostgreSQLデータベースに格納 |
-| `af_kmerpart` | 配列のパーティション情報を追加・削除 |
-| `af_kmerindex` | 配列データのGINインデックスを作成/削除 |
-| `af_kmersearch` | k-mer類似性を使用した配列検索 |
-| `af_kmerdbinfo` | データベースメタデータ情報を表示 |
-| `af_kmersearchclient` | 負荷分散機能付きリモートk-mer検索クライアント |
-| `af_kmersearchserver.pl` | 非同期ジョブ処理機能付きk-mer検索用REST APIサーバ（スタンドアローン） |
-| `af_kmersearchserver.fcgi` | 本番Webサーバ用FastCGI版 |
-| `af_kmersearchserver.psgi` | モダンなWebデプロイ用PSGI版 |
+| `kafssstore` | FASTA配列をPostgreSQLデータベースに格納 |
+| `kafsssubset` | 配列のサブセット情報を追加・削除 |
+| `kafssindex` | 配列データのGINインデックスを作成/削除 |
+| `kafsssearch` | k-mer類似性を使用した配列検索 |
+| `kafssdbinfo` | データベースメタデータ情報を表示 |
+| `kafsssearchclient` | 負荷分散機能付きリモートk-mer検索クライアント |
+| `kafsssearchserver.pl` | 非同期ジョブ処理機能付きk-mer検索用REST APIサーバ（スタンドアローン） |
+| `kafsssearchserver.fcgi` | 本番Webサーバ用FastCGI版 |
+| `kafsssearchserver.psgi` | モダンなWebデプロイ用PSGI版 |
 | `calcsegment` | 配列分割パラメータ計算用数学ユーティリティ |
 
 ## インストール
@@ -315,18 +315,18 @@ perl -MStarman -e 'print "Starman available\n"'
    sudo make install
    
    # カスタムインストールプレフィックス
-   make PREFIX=/opt/af_kmersearch
-   sudo make install PREFIX=/opt/af_kmersearch
+   make PREFIX=/opt/kafsssearch
+   sudo make install PREFIX=/opt/kafsssearch
    ```
 
-**注意**: サーバスクリプト（`af_kmersearchserver.pl`、`.fcgi`、`.psgi`）はmakeではインストールされません。適切なWebサーバの場所に手動でデプロイしてください。
+**注意**: サーバスクリプト（`kafsssearchserver.pl`、`.fcgi`、`.psgi`）はmakeではインストールされません。適切なWebサーバの場所に手動でデプロイしてください。
 
 ### 手動インストール
 
 1. PostgreSQLにpg_kmersearch拡張をインストール
 2. スクリプトを実行可能にする：
    ```bash
-   chmod +x af_kmer*.pl
+   chmod +x kafss*.pl
    ```
 
 ## データベース接続
@@ -341,13 +341,13 @@ perl -MStarman -e 'print "Starman available\n"'
 
 ## スクリプトドキュメント
 
-### af_kmerstore
+### kafssstore
 
 マルチFASTA DNA配列をPostgreSQLデータベースに格納します。
 
 #### 使用方法
 ```bash
-af_kmerstore [オプション] 入力ファイル名 出力データベース名
+kafssstore [オプション] 入力ファイル名 出力データベース名
 ```
 
 #### オプション
@@ -355,7 +355,7 @@ af_kmerstore [オプション] 入力ファイル名 出力データベース名
 - `--minlen=INT` - 分割用最小配列長（デフォルト: 50000）
 - `--ovllen=INT` - 分割配列間の重複長（デフォルト: 500）。重複の競合を防ぐため`--minsplitlen`の半分未満である必要があります
 - `--numthreads=INT` - 並列スレッド数（デフォルト: 1）
-- `--partition=NAME` - パーティション名（複数指定可能）
+- `--subset=NAME` - サブセット名（複数指定可能）
 - `--tablespace=NAME` - CREATE DATABASE用テーブルスペース名
 - `--overwrite` - 既存データベースを上書き
 
@@ -366,31 +366,31 @@ af_kmerstore [オプション] 入力ファイル名 出力データベース名
 #### 使用例
 ```bash
 # 基本的な使用方法
-af_kmerstore sequences.fasta mydb
+kafssstore sequences.fasta mydb
 
-# パーティションと並列処理を使用
-af_kmerstore --partition=bacteria --numthreads=4 sequences.fasta mydb
+# サブセットと並列処理を使用
+kafssstore --subset=bacteria --numthreads=4 sequences.fasta mydb
 
 # 標準入力から
-cat sequences.fasta | af_kmerstore stdin mydb
+cat sequences.fasta | kafssstore stdin mydb
 
 # カスタムパラメータ
-af_kmerstore --datatype=DNA2 --minlen=100000 sequences.fasta mydb
+kafssstore --datatype=DNA2 --minlen=100000 sequences.fasta mydb
 ```
 
-### af_kmerpart
+### kafsssubset
 
-アクセッション番号に基づく配列またはデータベース全体に対してパーティション情報の追加・削除を行います。
+アクセッション番号に基づく配列またはデータベース全体に対してサブセット情報の追加・削除を行います。
 
 #### 使用方法
 ```bash
-af_kmerpart [オプション] 入力ファイル名 データベース名
+kafsssubset [オプション] 入力ファイル名 データベース名
 ```
 
 #### オプション
 - `--mode=MODE` - 動作モード: `add`（デフォルト）または `del`
-- `--partition=NAME` - 追加/削除するパーティション名（必須、複数指定可能）
-  - delモード時のみ `all` を指定して全パーティションを対象にできます
+- `--subset=NAME` - 追加/削除するサブセット名（必須、複数指定可能）
+  - delモード時のみ `all` を指定して全サブセットを対象にできます
 - `--numthreads=INT` - 並列スレッド数（デフォルト: 1）
 
 #### 入力ファイル
@@ -401,35 +401,35 @@ af_kmerpart [オプション] 入力ファイル名 データベース名
 
 #### 使用例
 ```bash
-# 配列にパーティションを追加
-af_kmerpart --partition=bacteria accessions.txt mydb
-af_kmerpart --partition=bacteria,archaea accessions.txt mydb
+# 配列にサブセットを追加
+kafsssubset --subset=bacteria accessions.txt mydb
+kafsssubset --subset=bacteria,archaea accessions.txt mydb
 
-# 配列からパーティションを削除
-af_kmerpart --mode=del --partition=bacteria accessions.txt mydb
+# 配列からサブセットを削除
+kafsssubset --mode=del --subset=bacteria accessions.txt mydb
 
-# 全行から全パーティションを削除
-af_kmerpart --mode=del --partition=all all mydb
+# 全行から全サブセットを削除
+kafsssubset --mode=del --subset=all all mydb
 
-# 全行から特定パーティションを削除
-af_kmerpart --mode=del --partition=archaea all mydb
+# 全行から特定サブセットを削除
+kafsssubset --mode=del --subset=archaea all mydb
 
 # 標準入力から
-echo -e "AB123456\nCD789012" | af_kmerpart --partition=bacteria stdin mydb
+echo -e "AB123456\nCD789012" | kafsssubset --subset=bacteria stdin mydb
 ```
 
 #### 注意事項
-- addモード時にパーティション名 `all` の使用は禁止されています
+- addモード時にサブセット名 `all` の使用は禁止されています
 - 入力ファイル名に `all` を指定すると、データベースの全行が対象になります
-- `--partition=all` をdelモード時に使用すると、全パーティション情報が削除されます
+- `--subset=all` をdelモード時に使用すると、全サブセット情報が削除されます
 
-### af_kmerindex
+### kafssindex
 
 配列データのGINインデックスを作成または削除します。
 
 #### 使用方法
 ```bash
-af_kmerindex [オプション] データベース名
+kafssindex [オプション] データベース名
 ```
 
 #### オプション
@@ -439,27 +439,27 @@ af_kmerindex [オプション] データベース名
 #### 使用例
 ```bash
 # インデックス作成
-af_kmerindex --mode=create mydb
+kafssindex --mode=create mydb
 
 # 特定のテーブルスペースにインデックス作成
-af_kmerindex --mode=create --tablespace=fast_ssd mydb
+kafssindex --mode=create --tablespace=fast_ssd mydb
 
 # インデックス削除
-af_kmerindex --mode=drop mydb
+kafssindex --mode=drop mydb
 ```
 
-### af_kmersearch
+### kafsssearch
 
 k-mer類似性を使用してDNA配列を検索します。
 
 #### 使用方法
 ```bash
-af_kmersearch [オプション] 入力ファイル名 出力ファイル名
+kafsssearch [オプション] 入力ファイル名 出力ファイル名
 ```
 
 #### オプション
 - `--db=DATABASE` - PostgreSQLデータベース名（必須）
-- `--partition=NAME` - 特定のパーティションに検索を限定
+- `--subset=NAME` - 特定のサブセットに検索を限定
 - `--maxnseq=INT` - クエリあたりの最大結果数（デフォルト: 1000）
 - `--minscore=INT` - 最小スコア閾値
 - `--numthreads=INT` - 並列スレッド数（デフォルト: 1）
@@ -478,25 +478,25 @@ af_kmersearch [オプション] 入力ファイル名 出力ファイル名
 #### 使用例
 ```bash
 # 基本的な検索
-af_kmersearch --db=mydb query.fasta results.tsv
+kafsssearch --db=mydb query.fasta results.tsv
 
-# パーティションフィルタを使用した検索
-af_kmersearch --db=mydb --partition=bacteria query.fasta results.tsv
+# サブセットフィルタを使用した検索
+kafsssearch --db=mydb --subset=bacteria query.fasta results.tsv
 
 # カスタムパラメータを使用した並列検索
-af_kmersearch --db=mydb --numthreads=4 --maxnseq=500 query.fasta results.tsv
+kafsssearch --db=mydb --numthreads=4 --maxnseq=500 query.fasta results.tsv
 
 # パイプライン使用
-cat query.fasta | af_kmersearch --db=mydb stdin stdout > results.tsv
+cat query.fasta | kafsssearch --db=mydb stdin stdout > results.tsv
 ```
 
-### af_kmerdbinfo
+### kafssdbinfo
 
-af_kmersearchデータベースのメタデータ情報を表示します。
+kafsssearchデータベースのメタデータ情報を表示します。
 
 #### 使用方法
 ```bash
-af_kmerdbinfo [オプション] データベース名
+kafssdbinfo [オプション] データベース名
 ```
 
 #### オプション
@@ -509,44 +509,44 @@ af_kmerdbinfo [オプション] データベース名
 - 全ての出力はSTDERRに書き込まれます
 - バージョン、最小長、重複長を表示
 - 総配列数と総文字数を表示
-- パーティション情報と配列数・文字数を一覧表示
+- サブセット情報と配列数・文字数を一覧表示
 
 #### 使用例
 ```bash
 # 基本的な使用方法
-af_kmerdbinfo mydb
+kafssdbinfo mydb
 
 # リモートデータベース
-af_kmerdbinfo --host=remote-server mydb
+kafssdbinfo --host=remote-server mydb
 
 # カスタム接続パラメータ
-af_kmerdbinfo --host=localhost --port=5433 --username=postgres mydb
+kafssdbinfo --host=localhost --port=5433 --username=postgres mydb
 ```
 
-### af_kmersearchclient
+### kafsssearchclient
 
 非同期ジョブ処理、負荷分散機能、リトライロジック付きリモートk-mer検索クライアント。
 
 #### 使用方法
 ```bash
 # 新しいジョブ実行
-af_kmersearchclient [オプション] 入力ファイル名 出力ファイル名
+kafsssearchclient [オプション] 入力ファイル名 出力ファイル名
 
 # 既存ジョブの再開
-af_kmersearchclient --resume=ジョブID
+kafsssearchclient --resume=ジョブID
 
 # 既存ジョブのキャンセル
-af_kmersearchclient --cancel=ジョブID
+kafsssearchclient --cancel=ジョブID
 
 # アクティブジョブ一覧
-af_kmersearchclient --jobs
+kafsssearchclient --jobs
 ```
 
 #### オプション
 - `--server=SERVERS` - サーバURL（単一サーバまたはカンマ区切りリスト）
 - `--serverlist=FILE` - サーバURLを記載したファイル（1行に1つ）
 - `--db=DATABASE` - PostgreSQLデータベース名（サーバーにデフォルト設定があればオプション）
-- `--partition=NAME` - 特定のパーティションに検索を限定（オプション）
+- `--subset=NAME` - 特定のサブセットに検索を限定（オプション）
 - `--maxnseq=INT` - クエリあたりの最大結果数（デフォルト: 1000）
 - `--minscore=INT` - 最小スコア閾値（オプション）
 - `--numthreads=INT` - 並列スレッド数（デフォルト: 1）
@@ -578,7 +578,7 @@ HTTP Basic認証で保護されたサーバに対しては、以下のオプシ�
 
 **1. .netrcファイル（複数サーバの場合推奨）:**
 ```bash
-af_kmersearchclient --netrc-file=/path/to/netrc --server=https://server.com --db=mydb query.fasta results.tsv
+kafsssearchclient --netrc-file=/path/to/netrc --server=https://server.com --db=mydb query.fasta results.tsv
 ```
 
 .netrc形式:
@@ -594,7 +594,7 @@ password otherpassword
 
 **2. コマンドライン認証情報（全サーバ共通）:**
 ```bash
-af_kmersearchclient --http-user=myusername --http-password=mypassword --server=https://server.com --db=mydb query.fasta results.tsv
+kafsssearchclient --http-user=myusername --http-password=mypassword --server=https://server.com --db=mydb query.fasta results.tsv
 ```
 
 **3. 両オプション併用（フォールバック動作）:**
@@ -611,7 +611,7 @@ af_kmersearchclient --http-user=myusername --http-password=mypassword --server=h
 
 クライアントは自動ポーリング機能付きの非同期ジョブ処理をサポートします：
 
-- **ジョブ永続化**: ジョブは`.af_kmersearchclient`ファイルに保存され、再開機能を提供
+- **ジョブ永続化**: ジョブは`.kafsssearchclient`ファイルに保存され、再開機能を提供
 - **自動ポーリング**: 適応的間隔を使用（5秒 → 10秒 → 20秒 → 30秒 → 60秒）
 - **再開サポート**: `--resume=ジョブID`で中断されたジョブを再開可能
 - **キャンセルサポート**: `--cancel=ジョブID`で実行中のジョブをキャンセル可能
@@ -620,39 +620,39 @@ af_kmersearchclient --http-user=myusername --http-password=mypassword --server=h
 #### 使用例
 ```bash
 # 非同期処理を使用した基本的な使用方法
-af_kmersearchclient --server=localhost --db=mydb query.fasta results.tsv
+kafsssearchclient --server=localhost --db=mydb query.fasta results.tsv
 
 # 負荷分散を使用した複数サーバ
-af_kmersearchclient --server="server1,server2,server3" --db=mydb query.fasta results.tsv
+kafsssearchclient --server="server1,server2,server3" --db=mydb query.fasta results.tsv
 
 # サーバリストファイル
-af_kmersearchclient --serverlist=servers.txt --db=mydb query.fasta results.tsv
+kafsssearchclient --serverlist=servers.txt --db=mydb query.fasta results.tsv
 
 # 認証を使用（.netrcファイル）
-af_kmersearchclient --server=https://server.com --db=mydb --netrc-file=.netrc query.fasta results.tsv
+kafsssearchclient --server=https://server.com --db=mydb --netrc-file=.netrc query.fasta results.tsv
 
 # 認証を使用（コマンドライン）
-af_kmersearchclient --server=https://server.com --db=mydb --http-user=myuser --http-password=mypass query.fasta results.tsv
+kafsssearchclient --server=https://server.com --db=mydb --http-user=myuser --http-password=mypass query.fasta results.tsv
 
 # 並列処理とリトライ
-af_kmersearchclient --server=localhost --db=mydb --numthreads=4 --maxnretry=10 query.fasta results.tsv
+kafsssearchclient --server=localhost --db=mydb --numthreads=4 --maxnretry=10 query.fasta results.tsv
 
 # パイプライン使用
-cat query.fasta | af_kmersearchclient --server=localhost --db=mydb stdin stdout > results.tsv
+cat query.fasta | kafsssearchclient --server=localhost --db=mydb stdin stdout > results.tsv
 
 # ジョブ管理例
-af_kmersearchclient --jobs                                    # アクティブジョブ一覧
-af_kmersearchclient --resume=20250703T120000-AbCdEf123456     # ジョブ再開
-af_kmersearchclient --cancel=20250703T120000-AbCdEf123456     # ジョブキャンセル
+kafsssearchclient --jobs                                    # アクティブジョブ一覧
+kafsssearchclient --resume=20250703T120000-AbCdEf123456     # ジョブ再開
+kafsssearchclient --cancel=20250703T120000-AbCdEf123456     # ジョブキャンセル
 ```
 
-### af_kmersearchserver.pl
+### kafsssearchserver.pl
 
 k-mer検索用REST APIサーバ（スタンドアロンHTTPサーバ）。
 
 #### 使用方法
 ```bash
-perl af_kmersearchserver.pl [オプション]
+perl kafsssearchserver.pl [オプション]
 ```
 
 #### オプション
@@ -663,7 +663,7 @@ perl af_kmersearchserver.pl [オプション]
 スクリプトヘッダーでデフォルト値を編集：
 ```perl
 my $default_database = 'mykmersearch';  # デフォルトデータベース名
-my $default_partition = 'bacteria';     # デフォルトパーティション名
+my $default_subset = 'bacteria';     # デフォルトサブセット名
 my $default_maxnseq = 1000;             # デフォルト最大結果数
 my $default_minscore = '10';            # デフォルト最小スコア
 my $default_numthreads = 5;             # 並列スレッド数
@@ -679,7 +679,7 @@ my $default_numthreads = 5;             # 並列スレッド数
   "querylabel": "配列名",
   "queryseq": "ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG",
   "db": "データベース名",
-  "partition": "パーティション名",
+  "subset": "サブセット名",
   "maxnseq": 1000,
   "minscore": 10
 }
@@ -762,7 +762,7 @@ my $default_numthreads = 5;             # 並列スレッド数
 {
   "success": true,
   "default_database": "mykmersearch",
-  "default_partition": "bacteria",
+  "default_subset": "bacteria",
   "default_maxnseq": 1000,
   "default_minscore": "10",
   "server_version": "1.0",
@@ -773,10 +773,10 @@ my $default_numthreads = 5;             # 並列スレッド数
 #### 使用例
 ```bash
 # サーバ起動
-perl af_kmersearchserver.pl --listen-port=8080
+perl kafsssearchserver.pl --listen-port=8080
 
 # カスタムスレッド数でサーバ起動
-perl af_kmersearchserver.pl --listen-port=8080 --numthreads=10
+perl kafsssearchserver.pl --listen-port=8080 --numthreads=10
 
 # API呼び出し
 curl -X POST http://localhost:8080/search \
@@ -791,20 +791,20 @@ curl -X POST http://localhost:8080/search \
 curl http://localhost:8080/metadata
 ```
 
-### af_kmersearchserver.fcgi
+### kafsssearchserver.fcgi
 
 本番Webサーバ（NGINX/Apache）用FastCGI版。
 
 #### 使用方法
 ```bash
-perl af_kmersearchserver.fcgi [オプション]
+perl kafsssearchserver.fcgi [オプション]
 ```
 
 #### オプション
 - `--numthreads=NUM` - FastCGIプロセス数（デフォルト: 5）
 
 #### 設定
-af_kmersearchserver.plと同様 - スクリプトヘッダーでデフォルト値を編集。
+kafsssearchserver.plと同様 - スクリプトヘッダーでデフォルト値を編集。
 
 #### NGINX設定
 ```nginx
@@ -814,7 +814,7 @@ server {
     
     location /api/search {
         include fastcgi_params;
-        fastcgi_pass unix:/var/run/af_kmersearch.sock;
+        fastcgi_pass unix:/var/run/kafsssearch.sock;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
     }
 }
@@ -825,7 +825,7 @@ server {
 <VirtualHost *:80>
     ServerName your-domain.com
     
-    ScriptAlias /api/search /path/to/af_kmersearchserver.fcgi
+    ScriptAlias /api/search /path/to/kafsssearchserver.fcgi
     
     <Directory "/path/to/">
         SetHandler fcgid-script
@@ -838,18 +838,18 @@ server {
 #### プロセス管理
 ```bash
 # FastCGIプロセス起動
-spawn-fcgi -s /var/run/af_kmersearch.sock -U nginx -G nginx \
-           -u www-data -g www-data -P /var/run/af_kmersearch.pid \
-           -- perl af_kmersearchserver.fcgi --numthreads=5
+spawn-fcgi -s /var/run/kafsssearch.sock -U nginx -G nginx \
+           -u www-data -g www-data -P /var/run/kafsssearch.pid \
+           -- perl kafsssearchserver.fcgi --numthreads=5
 ```
 
-### af_kmersearchserver.psgi
+### kafsssearchserver.psgi
 
 様々なPSGIサーバでのモダンなWebデプロイ用PSGI版。
 
 #### 使用方法
 ```bash
-perl af_kmersearchserver.psgi [オプション]
+perl kafsssearchserver.psgi [オプション]
 ```
 
 #### オプション
@@ -861,26 +861,26 @@ perl af_kmersearchserver.psgi [オプション]
 - `--help, -h` - ヘルプメッセージを表示
 
 #### 設定
-af_kmersearchserver.plと同様 - スクリプトヘッダーでデフォルト値を編集。
+kafsssearchserver.plと同様 - スクリプトヘッダーでデフォルト値を編集。
 
 #### デプロイオプション
 ```bash
 # スタンドアローン（内蔵Starmanサーバ）
-perl af_kmersearchserver.psgi
+perl kafsssearchserver.psgi
 
 # plackupでの起動
-plackup -p 5000 --workers 10 af_kmersearchserver.psgi
+plackup -p 5000 --workers 10 kafsssearchserver.psgi
 
 # その他のPSGIサーバ
-starman --port 5000 --workers 10 af_kmersearchserver.psgi
-uwsgi --http :5000 --psgi af_kmersearchserver.psgi
+starman --port 5000 --workers 10 kafsssearchserver.psgi
+uwsgi --http :5000 --psgi kafsssearchserver.psgi
 ```
 
 #### 使用例
 ```bash
-perl af_kmersearchserver.psgi
-perl af_kmersearchserver.psgi --listen-port=8080 --workers=10
-plackup -p 8080 --workers 20 af_kmersearchserver.psgi
+perl kafsssearchserver.psgi
+perl kafsssearchserver.psgi --listen-port=8080 --workers=10
+plackup -p 8080 --workers 20 kafsssearchserver.psgi
 ```
 
 ## ワークフロー例
@@ -889,42 +889,42 @@ plackup -p 8080 --workers 20 af_kmersearchserver.psgi
 
 1. **データベース作成と配列格納:**
    ```bash
-   af_kmerstore --partition=bacteria sequences.fasta mydb
+   kafssstore --subset=bacteria sequences.fasta mydb
    ```
 
-2. **パーティション情報追加:**
+2. **サブセット情報追加:**
    ```bash
-   af_kmerpart --partition=pathogenic bacteria_ids.txt mydb
+   kafsssubset --subset=pathogenic bacteria_ids.txt mydb
    ```
 
 3. **インデックス作成:**
    ```bash
-   af_kmerindex --mode=create mydb
+   kafssindex --mode=create mydb
    ```
 
 4. **データベース情報確認:**
    ```bash
-   af_kmerdbinfo mydb
+   kafssdbinfo mydb
    ```
 
 5. **配列検索:**
    ```bash
-   af_kmersearch --db=mydb --partition=pathogenic query.fasta results.tsv
+   kafsssearch --db=mydb --subset=pathogenic query.fasta results.tsv
    ```
 
 ### Web APIデプロイメント
 
 1. **デフォルト値設定:**
    ```perl
-   # af_kmersearchserver.fcgiを編集
+   # kafsssearchserver.fcgiを編集
    my $default_database = 'mydb';
-   my $default_partition = 'bacteria';
+   my $default_subset = 'bacteria';
    ```
 
 2. **NGINXでのデプロイ:**
    ```bash
-   spawn-fcgi -s /var/run/af_kmersearch.sock \
-              -- perl af_kmersearchserver.fcgi --numthreads=5
+   spawn-fcgi -s /var/run/kafsssearch.sock \
+              -- perl kafsssearchserver.fcgi --numthreads=5
    ```
 
 3. **API経由での検索:**
@@ -938,7 +938,7 @@ plackup -p 8080 --workers 20 af_kmersearchserver.psgi
 
 - CPUコア数に基づいて適切な`--numthreads`を使用
 - 大量データロード後にインデックスを作成
-- 大規模データセットにはパーティションを使用
+- 大規模データセットにはサブセットを使用
 - `--tablespace`を使用してインデックスを高速ストレージ（SSD）に配置
 - Web APIでは適切なFastCGIプロセス数を設定
 

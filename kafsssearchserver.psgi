@@ -26,7 +26,7 @@ my $default_port = $ENV{PGPORT} || 5432;                  # PostgreSQL port
 my $default_user = $ENV{PGUSER} || getpwuid($<);          # PostgreSQL username
 my $default_password = $ENV{PGPASSWORD} || '';             # PostgreSQL password
 my $default_database = '';       # Set default database name here (e.g., 'mykmersearch')
-my $default_partition = '';      # Set default partition name here (e.g., 'bacteria')
+my $default_subset = '';      # Set default subset name here (e.g., 'bacteria')
 my $default_maxnseq = 1000;      # Set default maxnseq value here
 my $maxmaxnseq = 100000;         # Maximum allowed maxnseq value
 my $default_minscore = '';       # Set default minscore value here (empty = use pg_kmersearch default)
@@ -36,7 +36,7 @@ my $default_listen_port = 5000;  # PSGI server listen port
 my $default_workers = 5;         # Number of worker processes
 
 # SQLite job management settings
-my $default_sqlite_path = './af_kmersearchserver.sqlite';  # SQLite database path
+my $default_sqlite_path = './kafsssearchserver.sqlite';  # SQLite database path
 my $default_clean_limit = 86400;      # 24 hours (result retention period in seconds)
 my $default_job_timeout = 1800;       # 30 minutes (job timeout in seconds)
 my $default_max_jobs = 10;            # Maximum concurrent jobs
@@ -83,7 +83,7 @@ if ($help) {
 print STDERR "Initializing SQLite database...\n";
 initialize_sqlite_database($sqlite_path);
 
-print STDERR "af_kmersearchserver.psgi version $VERSION\n";
+print STDERR "kafsssearchserver.psgi version $VERSION\n";
 print STDERR "PostgreSQL Host: $host\n";
 print STDERR "PostgreSQL Port: $port\n";
 print STDERR "PostgreSQL Username: $username\n";
@@ -135,9 +135,9 @@ return $app;
 
 sub print_help {
     print <<EOF;
-af_kmersearchserver.psgi version $VERSION
+kafsssearchserver.psgi version $VERSION
 
-Usage: perl af_kmersearchserver.psgi [options]
+Usage: perl kafsssearchserver.psgi [options]
 
 PSGI server for asynchronous k-mer search using af_kmersearch database.
 Can be used standalone or with plackup/other PSGI servers.
@@ -148,7 +148,7 @@ Options:
   --username=USER     PostgreSQL username (default: \$PGUSER or current user)
   --listen-port=PORT  HTTP server listen port (default: 5000)
   --workers=NUM       Number of worker processes (default: 5)
-  --sqlite-path=PATH  SQLite database file path (default: ./af_kmersearchserver.sqlite)
+  --sqlite-path=PATH  SQLite database file path (default: ./kafsssearchserver.sqlite)
   --clean-limit=INT   Result retention period in seconds (default: 86400)
   --job-timeout=INT   Job timeout in seconds (default: 1800)
   --max-jobs=INT      Maximum concurrent jobs (default: 10)
@@ -163,14 +163,14 @@ Environment variables:
 
 PSGI Deployment:
   # Standalone (built-in Starman server)
-  perl af_kmersearchserver.psgi
+  perl kafsssearchserver.psgi
   
   # With plackup
-  plackup -p 5000 --workers 10 af_kmersearchserver.psgi
+  plackup -p 5000 --workers 10 kafsssearchserver.psgi
   
   # With other PSGI servers
-  starman --port 5000 --workers 10 af_kmersearchserver.psgi
-  uwsgi --http :5000 --psgi af_kmersearchserver.psgi
+  starman --port 5000 --workers 10 kafsssearchserver.psgi
+  uwsgi --http :5000 --psgi kafsssearchserver.psgi
 
 Asynchronous API Usage:
   POST /search   - Submit search job (returns job_id)
@@ -184,7 +184,7 @@ Asynchronous API Usage:
     "querylabel": "sequence_name",      // required
     "queryseq": "ATCGATCGATCG...",     // required
     "db": "database_name",             // optional if default configured
-    "partition": "partition_name",      // optional, uses default if configured
+    "subset": "subset_name",      // optional, uses default if configured
     "maxnseq": 1000,                   // optional, uses default if configured
     "minscore": 10,                    // optional, uses default if configured
     "mode": "normal"                   // optional: minimum, normal, maximum
@@ -223,9 +223,9 @@ Asynchronous API Usage:
   Response: {"status": "cancelled", "message": "Job has been cancelled"}
 
 Examples:
-  perl af_kmersearchserver.psgi
-  perl af_kmersearchserver.psgi --listen-port=8080 --workers=10
-  plackup -p 5000 --workers 20 af_kmersearchserver.psgi
+  perl kafsssearchserver.psgi
+  perl kafsssearchserver.psgi --listen-port=8080 --workers=10
+  plackup -p 5000 --workers 20 kafsssearchserver.psgi
 
 Notes:
   - Job IDs have format: YYYYMMDDThhmmss-[32-char Base64]
@@ -322,7 +322,7 @@ sub handle_search_async {
         
         # Set defaults
         $request->{db} ||= $default_database;
-        $request->{partition} ||= $default_partition;
+        $request->{subset} ||= $default_subset;
         $request->{maxnseq} ||= $default_maxnseq;
         $request->{minscore} ||= $default_minscore;
         $request->{minpsharedkey} ||= $default_minpsharedkey;
@@ -483,7 +483,7 @@ sub handle_metadata_request {
     eval {
         return send_success_response({
             default_database => $default_database,
-            default_partition => $default_partition,
+            default_subset => $default_subset,
             default_maxnseq => $default_maxnseq,
             default_minscore => $default_minscore,
             server_version => "1.0",
@@ -514,13 +514,13 @@ sub initialize_sqlite_database {
     
     # Create jobs table
     $dbh->do(<<'SQL');
-CREATE TABLE IF NOT EXISTS af_kmersearchserver_jobs (
+CREATE TABLE IF NOT EXISTS kafsssearchserver_jobs (
     job_id TEXT PRIMARY KEY,
     time TEXT NOT NULL,
     querylabel TEXT NOT NULL,
     queryseq TEXT NOT NULL,
     db TEXT NOT NULL,
-    partition TEXT,
+    subset TEXT,
     maxnseq INTEGER NOT NULL,
     minscore INTEGER NOT NULL,
     mode TEXT NOT NULL,
@@ -532,7 +532,7 @@ SQL
 
     # Create results table
     $dbh->do(<<'SQL');
-CREATE TABLE IF NOT EXISTS af_kmersearchserver_results (
+CREATE TABLE IF NOT EXISTS kafsssearchserver_results (
     job_id TEXT PRIMARY KEY,
     time TEXT NOT NULL,
     results TEXT NOT NULL
@@ -540,9 +540,9 @@ CREATE TABLE IF NOT EXISTS af_kmersearchserver_results (
 SQL
 
     # Create indexes for better performance
-    $dbh->do("CREATE INDEX IF NOT EXISTS idx_jobs_status ON af_kmersearchserver_jobs(status)");
-    $dbh->do("CREATE INDEX IF NOT EXISTS idx_jobs_time ON af_kmersearchserver_jobs(time)");
-    $dbh->do("CREATE INDEX IF NOT EXISTS idx_results_time ON af_kmersearchserver_results(time)");
+    $dbh->do("CREATE INDEX IF NOT EXISTS idx_jobs_status ON kafsssearchserver_jobs(status)");
+    $dbh->do("CREATE INDEX IF NOT EXISTS idx_jobs_time ON kafsssearchserver_jobs(time)");
+    $dbh->do("CREATE INDEX IF NOT EXISTS idx_results_time ON kafsssearchserver_results(time)");
     
     $dbh->disconnect();
     
@@ -586,8 +586,8 @@ sub generate_random_bytes {
 sub generate_job_id {
     my $timestamp = strftime("%Y%m%dT%H%M%S", localtime);
     my $random_bytes = generate_random_bytes(24);  # 192 bits
-    my $base64_part = encode_base64($random_bytes, '');  # 32 characters, no newlines
-    return "$timestamp-$base64_part";
+    my $base64_subset = encode_base64($random_bytes, '');  # 32 characters, no newlines
+    return "$timestamp-$base64_subset";
 }
 
 sub format_timestamp {
@@ -675,7 +675,7 @@ sub get_current_job_count {
         sqlite_unicode => 1
     });
     
-    my $sth = $dbh->prepare("SELECT COUNT(*) FROM af_kmersearchserver_jobs WHERE status = 'running'");
+    my $sth = $dbh->prepare("SELECT COUNT(*) FROM kafsssearchserver_jobs WHERE status = 'running'");
     $sth->execute();
     my ($count) = $sth->fetchrow_array();
     $sth->finish();
@@ -697,14 +697,14 @@ sub create_job {
         my $timeout_time = format_timestamp(time() + $job_timeout);
         
         $dbh->do(
-            "INSERT INTO af_kmersearchserver_jobs (job_id, time, querylabel, queryseq, db, partition, maxnseq, minscore, mode, status, timeout_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)",
+            "INSERT INTO kafsssearchserver_jobs (job_id, time, querylabel, queryseq, db, subset, maxnseq, minscore, mode, status, timeout_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)",
             undef,
             $job_id,
             format_timestamp(),
             $request->{querylabel},
             $request->{queryseq},
             $request->{db},
-            $request->{partition},
+            $request->{subset},
             $request->{maxnseq},
             $request->{minscore},
             $request->{mode},
@@ -736,7 +736,7 @@ sub start_background_job {
             sqlite_unicode => 1
         });
         
-        $dbh->do("UPDATE af_kmersearchserver_jobs SET pid = ? WHERE job_id = ?", undef, $pid, $job_id);
+        $dbh->do("UPDATE kafsssearchserver_jobs SET pid = ? WHERE job_id = ?", undef, $pid, $job_id);
         $dbh->disconnect();
         
         return $pid;
@@ -817,7 +817,7 @@ sub get_job_result {
         sqlite_unicode => 1
     });
     
-    my $sth = $dbh->prepare("SELECT results FROM af_kmersearchserver_results WHERE job_id = ?");
+    my $sth = $dbh->prepare("SELECT results FROM kafsssearchserver_results WHERE job_id = ?");
     $sth->execute($job_id);
     my ($results_json) = $sth->fetchrow_array();
     $sth->finish();
@@ -835,7 +835,7 @@ sub delete_job_result {
         sqlite_unicode => 1
     });
     
-    $dbh->do("DELETE FROM af_kmersearchserver_results WHERE job_id = ?", undef, $job_id);
+    $dbh->do("DELETE FROM kafsssearchserver_results WHERE job_id = ?", undef, $job_id);
     $dbh->disconnect();
 }
 
@@ -848,7 +848,7 @@ sub is_job_running {
         sqlite_unicode => 1
     });
     
-    my $sth = $dbh->prepare("SELECT 1 FROM af_kmersearchserver_jobs WHERE job_id = ? AND status = 'running'");
+    my $sth = $dbh->prepare("SELECT 1 FROM kafsssearchserver_jobs WHERE job_id = ? AND status = 'running'");
     $sth->execute($job_id);
     my $exists = $sth->fetchrow_array();
     $sth->finish();
@@ -867,7 +867,7 @@ sub cancel_job {
     });
     
     # Get job PID
-    my $sth = $dbh->prepare("SELECT pid FROM af_kmersearchserver_jobs WHERE job_id = ? AND status = 'running'");
+    my $sth = $dbh->prepare("SELECT pid FROM kafsssearchserver_jobs WHERE job_id = ? AND status = 'running'");
     $sth->execute($job_id);
     my ($pid) = $sth->fetchrow_array();
     $sth->finish();
@@ -879,7 +879,7 @@ sub cancel_job {
         kill 'KILL', $pid;  # Force kill if still running
         
         # Update job status
-        $dbh->do("UPDATE af_kmersearchserver_jobs SET status = 'cancelled' WHERE job_id = ?", undef, $job_id);
+        $dbh->do("UPDATE kafsssearchserver_jobs SET status = 'cancelled' WHERE job_id = ?", undef, $job_id);
         $dbh->disconnect();
         return 1;
     }
@@ -897,7 +897,7 @@ sub delete_job {
         sqlite_unicode => 1
     });
     
-    $dbh->do("DELETE FROM af_kmersearchserver_jobs WHERE job_id = ?", undef, $job_id);
+    $dbh->do("DELETE FROM kafsssearchserver_jobs WHERE job_id = ?", undef, $job_id);
     $dbh->disconnect();
 }
 
@@ -911,7 +911,7 @@ sub store_job_result {
     });
     
     $dbh->do(
-        "INSERT INTO af_kmersearchserver_results (job_id, time, results) VALUES (?, ?, ?)",
+        "INSERT INTO kafsssearchserver_results (job_id, time, results) VALUES (?, ?, ?)",
         undef,
         $job_id,
         format_timestamp(),
@@ -1008,10 +1008,10 @@ sub perform_database_search {
     
     my @params = ($request->{queryseq});
     
-    # Add partition condition if specified
-    if (defined $request->{partition} && $request->{partition} ne '') {
-        $inner_sql .= " AND ? = ANY(part)";
-        push @params, $request->{partition};
+    # Add subset condition if specified
+    if (defined $request->{subset} && $request->{subset} ne '') {
+        $inner_sql .= " AND ? = ANY(subset)";
+        push @params, $request->{subset};
     }
     
     # Add ORDER BY and LIMIT to inner query (use rawscore for performance)
@@ -1086,7 +1086,7 @@ sub build_search_response {
             querylabel => $request->{querylabel},
             queryseq => $request->{queryseq},
             db => $request->{db},
-            partition => $request->{partition},
+            subset => $request->{subset},
             maxnseq => $request->{maxnseq},
             minscore => $request->{minscore},
             mode => $request->{mode},
@@ -1275,22 +1275,22 @@ sub get_database_metadata {
     }) or die "Cannot connect to database '$database_name': $DBI::errstr";
     
     # Get metadata from af_kmersearch_meta table
-    my $sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, part, kmer_size FROM af_kmersearch_meta LIMIT 1");
+    my $sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size FROM af_kmersearch_meta LIMIT 1");
     $sth->execute();
-    my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $part_json, $kmer_size) = $sth->fetchrow_array();
+    my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $subset_json, $kmer_size) = $sth->fetchrow_array();
     $sth->finish();
     
     $dbh->disconnect();
     
-    # Parse partition JSON
-    my $part_data = {};
-    if ($part_json) {
+    # Parse subset JSON
+    my $subset_data = {};
+    if ($subset_json) {
         eval {
-            $part_data = decode_json($part_json);
+            $subset_data = decode_json($subset_json);
         };
         if ($@) {
-            warn "Warning: Failed to parse partition JSON: $@";
-            $part_data = {};
+            warn "Warning: Failed to parse subset JSON: $@";
+            $subset_data = {};
         }
     }
     
@@ -1301,7 +1301,7 @@ sub get_database_metadata {
         ovllen => int($ovllen || 0),
         nseq => int($nseq || 0),
         nchar => int($nchar || 0),
-        part => $part_data,
+        subset => $subset_data,
         kmer_size => int($kmer_size || 0)
     };
 }

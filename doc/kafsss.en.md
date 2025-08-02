@@ -1,10 +1,10 @@
-# af_kmersearch suite
+# kafsss: K-mer based Alignment-Free Splitted Sequence Search
 
 A comprehensive toolkit for storing, managing, and searching DNA sequences using PostgreSQL with the pg_kmersearch extension.
 
 ## Overview
 
-The af_kmersearch suite provides a complete solution for DNA sequence analysis using k-mer similarity search. The toolkit consists of 10 Perl scripts that handle different aspects of DNA sequence management, search operations, and server deployment with asynchronous job processing.
+The kafsss suite provides a complete solution for DNA sequence analysis using k-mer similarity search. The toolkit consists of 11 Perl scripts that handle different aspects of DNA sequence management, search operations, and server deployment with asynchronous job processing.
 
 ## Prerequisites
 
@@ -15,7 +15,7 @@ The af_kmersearch suite provides a complete solution for DNA sequence analysis u
 
 ### Required Perl Modules
 
-#### Core Database Tools (af_kmerstore, af_kmerindex, af_kmersearch, af_kmerpart, af_kmerdbinfo)
+#### Core Database Tools (kafssstore, kafssindex, kafsssearch, kafsssubset, kafssdbinfo, kafssdedup, kafssfreq)
 - `DBI` - Database access interface
 - `DBD::Pg` - PostgreSQL driver
 - `Getopt::Long` - Command line argument parsing
@@ -23,7 +23,7 @@ The af_kmersearch suite provides a complete solution for DNA sequence analysis u
 - `File::Basename` - File name manipulation
 - `Sys::Hostname` - System hostname retrieval
 
-#### Network Client (af_kmersearchclient)
+#### Network Client (kafsssearchclient)
 Core modules (above) plus:
 - `JSON` - JSON format processing
 - `LWP::UserAgent` - HTTP client
@@ -33,7 +33,7 @@ Core modules (above) plus:
 - `Time::HiRes` - High-resolution time functions
 - `Fcntl` - File control operations
 
-#### Standalone HTTP Server (af_kmersearchserver.pl)
+#### Standalone HTTP Server (kafsssearchserver.pl)
 Core modules plus:
 - `JSON` - JSON format processing
 - `HTTP::Server::Simple::CGI` - Standalone web server
@@ -43,7 +43,7 @@ Core modules plus:
 - `DBD::SQLite` - SQLite driver (for job management)
 - `Crypt::OpenSSL::Random` - Cryptographically secure random numbers
 
-#### FastCGI Server (af_kmersearchserver.fcgi)
+#### FastCGI Server (kafsssearchserver.fcgi)
 Core modules plus:
 - `JSON` - JSON format processing
 - `CGI::Fast` - FastCGI implementation
@@ -54,7 +54,7 @@ Core modules plus:
 - `DBD::SQLite` - SQLite driver (for job management)
 - `Crypt::OpenSSL::Random` - Cryptographically secure random numbers
 
-#### PSGI Server (af_kmersearchserver.psgi)
+#### PSGI Server (kafsssearchserver.psgi)
 Core modules plus:
 - `JSON` - JSON format processing
 - `Plack::Request` - PSGI request handling
@@ -69,7 +69,7 @@ Core modules plus:
 
 ### Database Setup
 
-Before using af_kmersearch tools, you must set up PostgreSQL properly:
+Before using kafsss tools, you must set up PostgreSQL properly:
 
 #### 1. Install PostgreSQL and pg_kmersearch extension
 ```bash
@@ -106,7 +106,7 @@ CREATE EXTENSION IF NOT EXISTS pg_kmersearch;
 sudo -u postgres psql
 ALTER USER yourusername SUPERUSER;
 \q
-# Run af_kmerstore, then revoke:
+# Run kafssstore, then revoke:
 # ALTER USER yourusername NOSUPERUSER;
 ```
 
@@ -133,7 +133,7 @@ sudo yum install -y perl-App-cpanminus  # or dnf
 sudo cpanm DBI DBD::Pg Getopt::Long POSIX File::Basename Sys::Hostname
 ```
 
-#### For Network Client (af_kmersearchclient)
+#### For Network Client (kafsssearchclient)
 **Ubuntu/Debian:**
 ```bash
 sudo apt-get install -y \
@@ -157,7 +157,7 @@ sudo cpanm DBI DBD::Pg JSON LWP::UserAgent HTTP::Request::Common URI \
            MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
 ```
 
-#### For Standalone HTTP Server (af_kmersearchserver.pl)
+#### For Standalone HTTP Server (kafsssearchserver.pl)
 **Ubuntu/Debian:**
 ```bash
 sudo apt-get install -y \
@@ -181,7 +181,7 @@ sudo cpanm DBI DBD::Pg JSON HTTP::Server::Simple::CGI \
            MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
 ```
 
-#### For FastCGI Server (af_kmersearchserver.fcgi)
+#### For FastCGI Server (kafsssearchserver.fcgi)
 **Ubuntu/Debian:**
 ```bash
 sudo apt-get install -y \
@@ -205,7 +205,7 @@ sudo cpanm DBI DBD::Pg JSON CGI::Fast FCGI::ProcManager \
            MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
 ```
 
-#### For PSGI Server (af_kmersearchserver.psgi)
+#### For PSGI Server (kafsssearchserver.psgi)
 **Ubuntu/Debian:**
 ```bash
 sudo apt-get install -y \
@@ -238,22 +238,22 @@ sudo cpanm DBI DBD::Pg JSON Plack::Request Plack::Response Plack::Builder \
 perl -MCPAN -e 'install DBI, DBD::Pg, Getopt::Long, POSIX, File::Basename, Sys::Hostname'
 ```
 
-**For Network Client (af_kmersearchclient):**
+**For Network Client (kafsssearchclient):**
 ```bash
 perl -MCPAN -e 'install DBI, DBD::Pg, JSON, LWP::UserAgent, HTTP::Request::Common, URI, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
 ```
 
-**For Standalone HTTP Server (af_kmersearchserver.pl):**
+**For Standalone HTTP Server (kafsssearchserver.pl):**
 ```bash
 perl -MCPAN -e 'install DBI, DBD::Pg, JSON, HTTP::Server::Simple::CGI, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
 ```
 
-**For FastCGI Server (af_kmersearchserver.fcgi):**
+**For FastCGI Server (kafsssearchserver.fcgi):**
 ```bash
 perl -MCPAN -e 'install DBI, DBD::Pg, JSON, CGI::Fast, FCGI::ProcManager, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
 ```
 
-**For PSGI Server (af_kmersearchserver.psgi):**
+**For PSGI Server (kafsssearchserver.psgi):**
 ```bash
 perl -MCPAN -e 'install DBI, DBD::Pg, JSON, Plack::Request, Plack::Response, Plack::Builder, Plack::Handler::Starman, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
 ```
@@ -293,15 +293,17 @@ perl -MStarman -e 'print "Starman available\n"'
 
 | Script | Purpose |
 |--------|---------|
-| `af_kmerstore` | Store FASTA sequences into PostgreSQL database |
-| `af_kmerpart` | Add/remove partition information for sequences |
-| `af_kmerindex` | Create/drop GIN indexes on sequence data |
-| `af_kmersearch` | Search sequences using k-mer similarity |
-| `af_kmerdbinfo` | Display database metadata information |
-| `af_kmersearchclient` | Remote k-mer search client with load balancing |
-| `af_kmersearchserver.pl` | REST API server for k-mer search (standalone) with asynchronous job processing |
-| `af_kmersearchserver.fcgi` | FastCGI version for production web servers |
-| `af_kmersearchserver.psgi` | PSGI version for modern web deployment |
+| `kafssstore` | Store FASTA sequences into PostgreSQL database |
+| `kafsssubset` | Add/remove subset information for sequences |
+| `kafssindex` | Create/drop GIN indexes on sequence data |
+| `kafsssearch` | Search sequences using k-mer similarity |
+| `kafssdbinfo` | Display database metadata information |
+| `kafssdedup` | Deduplicate sequences in database |
+| `kafssfreq` | K-mer frequency analysis |
+| `kafsssearchclient` | Remote k-mer search client with load balancing |
+| `kafsssearchserver.pl` | REST API server for k-mer search (standalone) with asynchronous job processing |
+| `kafsssearchserver.fcgi` | FastCGI version for production web servers |
+| `kafsssearchserver.psgi` | PSGI version for modern web deployment |
 | `calcsegment` | Mathematical utility for sequence segmentation parameter calculation |
 
 ## Installation
@@ -315,18 +317,18 @@ perl -MStarman -e 'print "Starman available\n"'
    sudo make install
    
    # Custom installation prefix
-   make PREFIX=/opt/af_kmersearch
-   sudo make install PREFIX=/opt/af_kmersearch
+   make PREFIX=/opt/kafsss
+   sudo make install PREFIX=/opt/kafsss
    ```
 
-**Note**: Server scripts (`af_kmersearchserver.pl`, `.fcgi`, `.psgi`) are not installed by make and should be manually deployed to appropriate web server locations.
+**Note**: Server scripts (`kafsssearchserver.pl`, `.fcgi`, `.psgi`) are not installed by make and should be manually deployed to appropriate web server locations.
 
 ### Manual Installation
 
 1. Install pg_kmersearch extension in PostgreSQL
 2. Make scripts executable:
    ```bash
-   chmod +x af_kmer*.pl
+   chmod +x kafss*.pl kafsssearch*.pl
    ```
 
 ## Database Connection
@@ -341,13 +343,13 @@ Password is read from the `PGPASSWORD` environment variable.
 
 ## Script Documentation
 
-### af_kmerstore
+### kafssstore
 
 Store multi-FASTA DNA sequences into PostgreSQL database.
 
 #### Usage
 ```bash
-af_kmerstore [options] input_file output_database
+kafssstore [options] input_file output_database
 ```
 
 #### Options
@@ -355,7 +357,7 @@ af_kmerstore [options] input_file output_database
 - `--minlen=INT` - Minimum sequence length for splitting (default: 50000)
 - `--ovllen=INT` - Overlap length between split sequences (default: 500). Must be less than half of `--minsplitlen` to prevent overlap conflicts
 - `--numthreads=INT` - Number of parallel threads (default: 1)
-- `--partition=NAME` - Partition name (multiple values allowed)
+- `--subset=NAME` - Subset name (multiple values allowed)
 - `--tablespace=NAME` - Tablespace name for CREATE DATABASE
 - `--overwrite` - Overwrite existing database
 
@@ -366,31 +368,31 @@ af_kmerstore [options] input_file output_database
 #### Examples
 ```bash
 # Basic usage
-af_kmerstore sequences.fasta mydb
+kafssstore sequences.fasta mydb
 
-# With partitions and parallel processing
-af_kmerstore --partition=bacteria --numthreads=4 sequences.fasta mydb
+# With subsets and parallel processing
+kafssstore --subset=bacteria --numthreads=4 sequences.fasta mydb
 
 # From standard input
-cat sequences.fasta | af_kmerstore stdin mydb
+cat sequences.fasta | kafssstore stdin mydb
 
 # Custom parameters
-af_kmerstore --datatype=DNA2 --minlen=100000 sequences.fasta mydb
+kafssstore --datatype=DNA2 --minlen=100000 sequences.fasta mydb
 ```
 
-### af_kmerpart
+### kafsssubset
 
-Add or remove partition information for sequences based on accession numbers or apply operations to all rows.
+Add or remove subset information for sequences based on accession numbers or apply operations to all rows.
 
 #### Usage
 ```bash
-af_kmerpart [options] input_file database_name
+kafsssubset [options] input_file database_name
 ```
 
 #### Options
 - `--mode=MODE` - Operation mode: `add` (default) or `del`
-- `--partition=NAME` - Partition name to add/remove (required, multiple values allowed)
-  - Use `all` to target all partitions (only in del mode)
+- `--subset=NAME` - Subset name to add/remove (required, multiple values allowed)
+  - Use `all` to target all subsets (only in del mode)
 - `--numthreads=INT` - Number of parallel threads (default: 1)
 
 #### Input File
@@ -401,35 +403,35 @@ af_kmerpart [options] input_file database_name
 
 #### Examples
 ```bash
-# Add partitions to sequences
-af_kmerpart --partition=bacteria accessions.txt mydb
-af_kmerpart --partition=bacteria,archaea accessions.txt mydb
+# Add subsets to sequences
+kafsssubset --subset=bacteria accessions.txt mydb
+kafsssubset --subset=bacteria,archaea accessions.txt mydb
 
-# Remove partitions from sequences
-af_kmerpart --mode=del --partition=bacteria accessions.txt mydb
+# Remove subsets from sequences
+kafsssubset --mode=del --subset=bacteria accessions.txt mydb
 
-# Remove all partitions from all rows
-af_kmerpart --mode=del --partition=all all mydb
+# Remove all subsets from all rows
+kafsssubset --mode=del --subset=all all mydb
 
-# Remove specific partition from all rows
-af_kmerpart --mode=del --partition=archaea all mydb
+# Remove specific subset from all rows
+kafsssubset --mode=del --subset=archaea all mydb
 
 # From standard input
-echo -e "AB123456\nCD789012" | af_kmerpart --partition=bacteria stdin mydb
+echo -e "AB123456\nCD789012" | kafsssubset --subset=bacteria stdin mydb
 ```
 
 #### Notes
-- Partition name `all` is prohibited in add mode
+- Subset name `all` is prohibited in add mode
 - When input file is `all`, operations target all rows in the database
-- When `--partition=all` is used in del mode, all partition information is removed
+- When `--subset=all` is used in del mode, all subset information is removed
 
-### af_kmerindex
+### kafssindex
 
 Create or drop GIN indexes on sequence data.
 
 #### Usage
 ```bash
-af_kmerindex [options] database_name
+kafssindex [options] database_name
 ```
 
 #### Options
@@ -439,27 +441,27 @@ af_kmerindex [options] database_name
 #### Examples
 ```bash
 # Create indexes
-af_kmerindex --mode=create mydb
+kafssindex --mode=create mydb
 
 # Create indexes on specific tablespace
-af_kmerindex --mode=create --tablespace=fast_ssd mydb
+kafssindex --mode=create --tablespace=fast_ssd mydb
 
 # Drop indexes
-af_kmerindex --mode=drop mydb
+kafssindex --mode=drop mydb
 ```
 
-### af_kmersearch
+### kafsssearch
 
 Search DNA sequences using k-mer similarity.
 
 #### Usage
 ```bash
-af_kmersearch [options] input_file output_file
+kafsssearch [options] input_file output_file
 ```
 
 #### Options
 - `--db=DATABASE` - PostgreSQL database name (required)
-- `--partition=NAME` - Limit search to specific partition
+- `--subset=NAME` - Limit search to specific subset
 - `--maxnseq=INT` - Maximum number of results per query (default: 1000)
 - `--minscore=INT` - Minimum score threshold
 - `--numthreads=INT` - Number of parallel threads (default: 1)
@@ -478,25 +480,25 @@ Tab-separated values with 4 columns:
 #### Examples
 ```bash
 # Basic search
-af_kmersearch --db=mydb query.fasta results.tsv
+kafsssearch --db=mydb query.fasta results.tsv
 
-# Search with partition filter
-af_kmersearch --db=mydb --partition=bacteria query.fasta results.tsv
+# Search with subset filter
+kafsssearch --db=mydb --subset=bacteria query.fasta results.tsv
 
 # Parallel search with custom parameters
-af_kmersearch --db=mydb --numthreads=4 --maxnseq=500 query.fasta results.tsv
+kafsssearch --db=mydb --numthreads=4 --maxnseq=500 query.fasta results.tsv
 
 # Pipeline usage
-cat query.fasta | af_kmersearch --db=mydb stdin stdout > results.tsv
+cat query.fasta | kafsssearch --db=mydb stdin stdout > results.tsv
 ```
 
-### af_kmerdbinfo
+### kafssdbinfo
 
-Display metadata information from af_kmersearch database.
+Display metadata information from kafsssearch database.
 
 #### Usage
 ```bash
-af_kmerdbinfo [options] database_name
+kafssdbinfo [options] database_name
 ```
 
 #### Options
@@ -509,44 +511,44 @@ af_kmerdbinfo [options] database_name
 - All output is written to STDERR
 - Displays version, min length, overlap length
 - Shows total sequences and characters
-- Lists partition information with sequence and character counts
+- Lists subset information with sequence and character counts
 
 #### Examples
 ```bash
 # Basic usage
-af_kmerdbinfo mydb
+kafssdbinfo mydb
 
 # Remote database
-af_kmerdbinfo --host=remote-server mydb
+kafssdbinfo --host=remote-server mydb
 
 # Custom connection parameters
-af_kmerdbinfo --host=localhost --port=5433 --username=postgres mydb
+kafssdbinfo --host=localhost --port=5433 --username=postgres mydb
 ```
 
-### af_kmersearchclient
+### kafsssearchclient
 
 Remote k-mer search client with asynchronous job processing, load balancing, and retry logic.
 
 #### Usage
 ```bash
 # New job submission
-af_kmersearchclient [options] input_file output_file
+kafsssearchclient [options] input_file output_file
 
 # Resume existing job
-af_kmersearchclient --resume=JOB_ID
+kafsssearchclient --resume=JOB_ID
 
 # Cancel existing job
-af_kmersearchclient --cancel=JOB_ID
+kafsssearchclient --cancel=JOB_ID
 
 # List active jobs
-af_kmersearchclient --jobs
+kafsssearchclient --jobs
 ```
 
 #### Options
 - `--server=SERVERS` - Server URL(s) - single server or comma-separated list
 - `--serverlist=FILE` - File containing server URLs (one per line)
 - `--db=DATABASE` - PostgreSQL database name (optional if server has default)
-- `--partition=NAME` - Limit search to specific partition (optional)
+- `--subset=NAME` - Limit search to specific subset (optional)
 - `--maxnseq=INT` - Maximum number of results per query (default: 1000)
 - `--minscore=INT` - Minimum score threshold (optional)
 - `--numthreads=INT` - Number of parallel threads (default: 1)
@@ -578,7 +580,7 @@ For servers protected by HTTP Basic authentication, use one of these options:
 
 **1. .netrc file (recommended for multiple servers):**
 ```bash
-af_kmersearchclient --netrc-file=/path/to/netrc --server=https://server.com --db=mydb query.fasta results.tsv
+kafsssearchclient --netrc-file=/path/to/netrc --server=https://server.com --db=mydb query.fasta results.tsv
 ```
 
 .netrc format:
@@ -594,7 +596,7 @@ password otherpassword
 
 **2. Command line credentials (for all servers):**
 ```bash
-af_kmersearchclient --http-user=myusername --http-password=mypassword --server=https://server.com --db=mydb query.fasta results.tsv
+kafsssearchclient --http-user=myusername --http-password=mypassword --server=https://server.com --db=mydb query.fasta results.tsv
 ```
 
 **3. Both options (fallback behavior):**
@@ -611,7 +613,7 @@ Specific hostnames in .netrc are used first, command line credentials are used a
 
 The client now supports asynchronous job processing with automatic polling:
 
-- **Job Persistence**: Jobs are saved to `.af_kmersearchclient` file for resume capability
+- **Job Persistence**: Jobs are saved to `.kafsssearchclient` file for resume capability
 - **Automatic Polling**: Uses adaptive intervals (5s → 10s → 20s → 30s → 60s)
 - **Resume Support**: Can resume interrupted jobs using `--resume=JOB_ID`
 - **Cancel Support**: Can cancel running jobs using `--cancel=JOB_ID`
@@ -620,39 +622,39 @@ The client now supports asynchronous job processing with automatic polling:
 #### Examples
 ```bash
 # Basic usage with asynchronous processing
-af_kmersearchclient --server=localhost --db=mydb query.fasta results.tsv
+kafsssearchclient --server=localhost --db=mydb query.fasta results.tsv
 
 # Multiple servers with load balancing
-af_kmersearchclient --server="server1,server2,server3" --db=mydb query.fasta results.tsv
+kafsssearchclient --server="server1,server2,server3" --db=mydb query.fasta results.tsv
 
 # Server list file
-af_kmersearchclient --serverlist=servers.txt --db=mydb query.fasta results.tsv
+kafsssearchclient --serverlist=servers.txt --db=mydb query.fasta results.tsv
 
 # With authentication (.netrc file)
-af_kmersearchclient --server=https://server.com --db=mydb --netrc-file=.netrc query.fasta results.tsv
+kafsssearchclient --server=https://server.com --db=mydb --netrc-file=.netrc query.fasta results.tsv
 
 # With authentication (command line)
-af_kmersearchclient --server=https://server.com --db=mydb --http-user=myuser --http-password=mypass query.fasta results.tsv
+kafsssearchclient --server=https://server.com --db=mydb --http-user=myuser --http-password=mypass query.fasta results.tsv
 
 # Parallel processing with retries
-af_kmersearchclient --server=localhost --db=mydb --numthreads=4 --maxnretry=10 query.fasta results.tsv
+kafsssearchclient --server=localhost --db=mydb --numthreads=4 --maxnretry=10 query.fasta results.tsv
 
 # Pipeline usage
-cat query.fasta | af_kmersearchclient --server=localhost --db=mydb stdin stdout > results.tsv
+cat query.fasta | kafsssearchclient --server=localhost --db=mydb stdin stdout > results.tsv
 
 # Job management examples
-af_kmersearchclient --jobs                                    # List active jobs
-af_kmersearchclient --resume=20250703T120000-AbCdEf123456     # Resume job
-af_kmersearchclient --cancel=20250703T120000-AbCdEf123456     # Cancel job
+kafsssearchclient --jobs                                    # List active jobs
+kafsssearchclient --resume=20250703T120000-AbCdEf123456     # Resume job
+kafsssearchclient --cancel=20250703T120000-AbCdEf123456     # Cancel job
 ```
 
-### af_kmersearchserver.pl
+### kafsssearchserver.pl
 
 REST API server for k-mer search (standalone HTTP server).
 
 #### Usage
 ```bash
-perl af_kmersearchserver.pl [options]
+perl kafsssearchserver.pl [options]
 ```
 
 #### Options
@@ -663,7 +665,7 @@ perl af_kmersearchserver.pl [options]
 Edit default values in the script header:
 ```perl
 my $default_database = 'mykmersearch';  # Default database name
-my $default_partition = 'bacteria';     # Default partition name
+my $default_subset = 'bacteria';     # Default subset name
 my $default_maxnseq = 1000;             # Default max results
 my $default_minscore = '10';            # Default min score
 my $default_numthreads = 5;             # Number of parallel threads
@@ -679,7 +681,7 @@ Request JSON:
   "querylabel": "sequence_name",
   "queryseq": "ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG",
   "db": "database_name",
-  "partition": "partition_name",
+  "subset": "subset_name",
   "maxnseq": 1000,
   "minscore": 10
 }
@@ -762,7 +764,7 @@ Response JSON:
 {
   "success": true,
   "default_database": "mykmersearch",
-  "default_partition": "bacteria",
+  "default_subset": "bacteria",
   "default_maxnseq": 1000,
   "default_minscore": "10",
   "server_version": "1.0",
@@ -773,10 +775,10 @@ Response JSON:
 #### Examples
 ```bash
 # Start server
-perl af_kmersearchserver.pl --listen-port=8080
+perl kafsssearchserver.pl --listen-port=8080
 
 # Start server with custom thread count
-perl af_kmersearchserver.pl --listen-port=8080 --numthreads=10
+perl kafsssearchserver.pl --listen-port=8080 --numthreads=10
 
 # API call
 curl -X POST http://localhost:8080/search \
@@ -791,20 +793,20 @@ curl -X POST http://localhost:8080/search \
 curl http://localhost:8080/metadata
 ```
 
-### af_kmersearchserver.fcgi
+### kafsssearchserver.fcgi
 
 FastCGI version for production web servers (NGINX/Apache).
 
 #### Usage
 ```bash
-perl af_kmersearchserver.fcgi [options]
+perl kafsssearchserver.fcgi [options]
 ```
 
 #### Options
 - `--numthreads=NUM` - Number of FastCGI processes (default: 5)
 
 #### Configuration
-Same as af_kmersearchserver.pl - edit default values in script header.
+Same as kafsssearchserver.pl - edit default values in script header.
 
 #### NGINX Setup
 ```nginx
@@ -814,7 +816,7 @@ server {
     
     location /api/search {
         include fastcgi_params;
-        fastcgi_pass unix:/var/run/af_kmersearch.sock;
+        fastcgi_pass unix:/var/run/kafsssearch.sock;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
     }
 }
@@ -825,7 +827,7 @@ server {
 <VirtualHost *:80>
     ServerName your-domain.com
     
-    ScriptAlias /api/search /path/to/af_kmersearchserver.fcgi
+    ScriptAlias /api/search /path/to/kafsssearchserver.fcgi
     
     <Directory "/path/to/">
         SetHandler fcgid-script
@@ -838,18 +840,18 @@ server {
 #### Process Management
 ```bash
 # Start FastCGI processes
-spawn-fcgi -s /var/run/af_kmersearch.sock -U nginx -G nginx \
-           -u www-data -g www-data -P /var/run/af_kmersearch.pid \
-           -- perl af_kmersearchserver.fcgi --numthreads=5
+spawn-fcgi -s /var/run/kafsssearch.sock -U nginx -G nginx \
+           -u www-data -g www-data -P /var/run/kafsssearch.pid \
+           -- perl kafsssearchserver.fcgi --numthreads=5
 ```
 
-### af_kmersearchserver.psgi
+### kafsssearchserver.psgi
 
 PSGI version for modern web deployment with various PSGI servers.
 
 #### Usage
 ```bash
-perl af_kmersearchserver.psgi [options]
+perl kafsssearchserver.psgi [options]
 ```
 
 #### Options
@@ -861,26 +863,26 @@ perl af_kmersearchserver.psgi [options]
 - `--help, -h` - Show help message
 
 #### Configuration
-Same as af_kmersearchserver.pl - edit default values in script header.
+Same as kafsssearchserver.pl - edit default values in script header.
 
 #### Deployment Options
 ```bash
 # Standalone (built-in Starman server)
-perl af_kmersearchserver.psgi
+perl kafsssearchserver.psgi
 
 # With plackup
-plackup -p 5000 --workers 10 af_kmersearchserver.psgi
+plackup -p 5000 --workers 10 kafsssearchserver.psgi
 
 # With other PSGI servers
-starman --port 5000 --workers 10 af_kmersearchserver.psgi
-uwsgi --http :5000 --psgi af_kmersearchserver.psgi
+starman --port 5000 --workers 10 kafsssearchserver.psgi
+uwsgi --http :5000 --psgi kafsssearchserver.psgi
 ```
 
 #### Examples
 ```bash
-perl af_kmersearchserver.psgi
-perl af_kmersearchserver.psgi --listen-port=8080 --workers=10
-plackup -p 8080 --workers 20 af_kmersearchserver.psgi
+perl kafsssearchserver.psgi
+perl kafsssearchserver.psgi --listen-port=8080 --workers=10
+plackup -p 8080 --workers 20 kafsssearchserver.psgi
 ```
 
 ## Workflow Examples
@@ -889,42 +891,42 @@ plackup -p 8080 --workers 20 af_kmersearchserver.psgi
 
 1. **Create database and store sequences:**
    ```bash
-   af_kmerstore --partition=bacteria sequences.fasta mydb
+   kafssstore --subset=bacteria sequences.fasta mydb
    ```
 
-2. **Add partition information:**
+2. **Add subset information:**
    ```bash
-   af_kmerpart --partition=pathogenic bacteria_ids.txt mydb
+   kafsssubset --subset=pathogenic bacteria_ids.txt mydb
    ```
 
 3. **Create indexes:**
    ```bash
-   af_kmerindex --mode=create mydb
+   kafssindex --mode=create mydb
    ```
 
 4. **Check database information:**
    ```bash
-   af_kmerdbinfo mydb
+   kafssdbinfo mydb
    ```
 
 5. **Search sequences:**
    ```bash
-   af_kmersearch --db=mydb --partition=pathogenic query.fasta results.tsv
+   kafsssearch --db=mydb --subset=pathogenic query.fasta results.tsv
    ```
 
 ### Web API Deployment
 
 1. **Configure defaults:**
    ```perl
-   # Edit af_kmersearchserver.fcgi
+   # Edit kafsssearchserver.fcgi
    my $default_database = 'mydb';
-   my $default_partition = 'bacteria';
+   my $default_subset = 'bacteria';
    ```
 
 2. **Deploy with NGINX:**
    ```bash
-   spawn-fcgi -s /var/run/af_kmersearch.sock \
-              -- perl af_kmersearchserver.fcgi --numthreads=5
+   spawn-fcgi -s /var/run/kafsssearch.sock \
+              -- perl kafsssearchserver.fcgi --numthreads=5
    ```
 
 3. **Search via API:**
@@ -938,7 +940,7 @@ plackup -p 8080 --workers 20 af_kmersearchserver.psgi
 
 - Use appropriate `--numthreads` based on CPU cores
 - Create indexes after bulk data loading
-- Use partitions for large datasets
+- Use subsets for large datasets
 - Place indexes on fast storage (SSD) using `--tablespace`
 - For web APIs, configure appropriate FastCGI process counts
 

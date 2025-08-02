@@ -39,13 +39,13 @@ if ($help) {
 
 # Check required arguments
 if (@ARGV != 1) {
-    die "Usage: af_kmerdbinfo [options] database_name\n" .
+    die "Usage: kafssdbinfo [options] database_name\n" .
         "Use --help for detailed usage information.\n";
 }
 
 my ($database_name) = @ARGV;
 
-print STDERR "af_kmerdbinfo version $VERSION\n";
+print STDERR "kafssdbinfo version $VERSION\n";
 print STDERR "Database: $database_name\n";
 print STDERR "Host: $host\n";
 print STDERR "Port: $port\n";
@@ -80,26 +80,26 @@ my $dbh = DBI->connect($dsn, $username, $password, {
 validate_database_permissions($dbh, $username);
 validate_database_schema($dbh);
 
-# Check if af_kmersearch_meta table exists
+# Check if kafsss_meta table exists
 my $sth = $dbh->prepare(<<SQL);
 SELECT COUNT(*)
 FROM information_schema.tables 
-WHERE table_name = 'af_kmersearch_meta'
+WHERE table_name = 'kafsss_meta'
 SQL
 $sth->execute();
 my ($table_count) = $sth->fetchrow_array();
 $sth->finish();
 
 unless ($table_count > 0) {
-    print STDERR "Error: Table 'af_kmersearch_meta' does not exist in database '$database_name'\n";
+    print STDERR "Error: Table 'kafsss_meta' does not exist in database '$database_name'\n";
     $dbh->disconnect();
     exit 1;
 }
 
-# Get metadata from af_kmersearch_meta table (including new kmer-related columns)
-$sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, part, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow FROM af_kmersearch_meta LIMIT 1");
+# Get metadata from kafsss_meta table (including new kmer-related columns)
+$sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow FROM kafsss_meta LIMIT 1");
 $sth->execute();
-my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $part_json, $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow) = $sth->fetchrow_array();
+my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $subset_json, $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow) = $sth->fetchrow_array();
 $sth->finish();
 
 # Get sequence data type information
@@ -108,7 +108,7 @@ eval {
     my $datatype_sth = $dbh->prepare(<<SQL);
 SELECT CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
 FROM information_schema.columns 
-WHERE table_name = 'af_kmersearch' AND column_name = 'seq'
+WHERE table_name = 'kafsss_data' AND column_name = 'seq'
 SQL
     $datatype_sth->execute();
     ($seq_datatype) = $datatype_sth->fetchrow_array();
@@ -119,7 +119,7 @@ $dbh->disconnect();
 
 # Check if data exists
 unless (defined $ver) {
-    print STDERR "Error: No data found in af_kmersearch_meta table\n";
+    print STDERR "Error: No data found in kafsss_meta table\n";
     exit 1;
 }
 
@@ -145,38 +145,38 @@ if (defined $kmer_size) {
     print STDERR "K-mer index: Not configured\n";
 }
 
-# Parse and display partition information
-print STDERR "\n=== Partition Information ===\n";
-if ($part_json) {
+# Parse and display subset information
+print STDERR "\n=== Subset Information ===\n";
+if ($subset_json) {
     eval {
-        my $part_data = decode_json($part_json);
+        my $subset_data = decode_json($subset_json);
         
-        if (keys %$part_data > 0) {
-            print STDERR "Partitions:\n";
+        if (keys %$subset_data > 0) {
+            print STDERR "Subsets:\n";
             
-            # Sort partition names for consistent output
-            my @partition_names = sort keys %$part_data;
+            # Sort subset names for consistent output
+            my @subset_names = sort keys %$subset_data;
             
-            for my $partition_name (@partition_names) {
-                my $partition_info = $part_data->{$partition_name};
-                my $partition_nseq = $partition_info->{nseq} || 0;
-                my $partition_nchar = $partition_info->{nchar} || 0;
+            for my $subset_name (@subset_names) {
+                my $subset_info = $subset_data->{$subset_name};
+                my $subset_nseq = $subset_info->{nseq} || 0;
+                my $subset_nchar = $subset_info->{nchar} || 0;
                 
-                print STDERR "  $partition_name:\n";
-                print STDERR "    Sequences: $partition_nseq\n";
-                print STDERR "    Characters: $partition_nchar\n";
+                print STDERR "  $subset_name:\n";
+                print STDERR "    Sequences: $subset_nseq\n";
+                print STDERR "    Characters: $subset_nchar\n";
             }
         } else {
-            print STDERR "Partitions: none\n";
+            print STDERR "Subsets: none\n";
         }
     };
     
     if ($@) {
-        print STDERR "Warning: Failed to parse partition data: $@\n";
-        print STDERR "Raw partition data: $part_json\n";
+        print STDERR "Warning: Failed to parse subset data: $@\n";
+        print STDERR "Raw subset data: $subset_json\n";
     }
 } else {
-    print STDERR "Partitions: none\n";
+    print STDERR "Subsets: none\n";
 }
 
 exit 0;
@@ -187,11 +187,11 @@ exit 0;
 
 sub print_help {
     print <<EOF;
-af_kmerdbinfo version $VERSION
+kafssdbinfo version $VERSION
 
-Usage: af_kmerdbinfo [options] database_name
+Usage: kafssdbinfo [options] database_name
 
-Display metadata information from af_kmersearch database.
+Display metadata information from kafsss database.
 
 Required arguments:
   database_name     PostgreSQL database name
@@ -213,12 +213,12 @@ Output:
   - Database connection information
   - Version, min length, overlap length
   - Total sequences and characters
-  - Partition information with sequence and character counts
+  - Subset information with sequence and character counts
 
 Examples:
-  af_kmerdbinfo mydb
-  af_kmerdbinfo --host=remote-server mydb
-  af_kmerdbinfo --host=localhost --port=5433 --username=postgres mydb
+  kafssdbinfo mydb
+  kafssdbinfo --host=remote-server mydb
+  kafssdbinfo --host=localhost --port=5433 --username=postgres mydb
 
 EOF
 }
@@ -280,30 +280,30 @@ sub validate_database_permissions {
             "  \\q\n";
     }
     
-    # Check table permissions - af_kmerdbinfo needs SELECT on both tables
-    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'af_kmersearch_meta', 'SELECT')");
+    # Check table permissions - kafssdbinfo needs SELECT on both tables
+    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'kafsss_meta', 'SELECT')");
     $sth->execute($username);
     my $has_meta_perm = $sth->fetchrow_array();
     $sth->finish();
     
     unless ($has_meta_perm) {
-        die "Error: User '$username' does not have SELECT permission on af_kmersearch_meta table.\n" .
+        die "Error: User '$username' does not have SELECT permission on kafsss_meta table.\n" .
             "Please grant permissions:\n" .
             "  sudo -u postgres psql -d " . $dbh->{pg_db} . "\n" .
-            "  GRANT SELECT ON af_kmersearch_meta TO $username;\n" .
+            "  GRANT SELECT ON kafsss_meta TO $username;\n" .
             "  \\q\n";
     }
     
-    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'af_kmersearch', 'SELECT')");
+    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'kafsss_data', 'SELECT')");
     $sth->execute($username);
     my $has_table_perm = $sth->fetchrow_array();
     $sth->finish();
     
     unless ($has_table_perm) {
-        die "Error: User '$username' does not have SELECT permission on af_kmersearch table.\n" .
+        die "Error: User '$username' does not have SELECT permission on kafsss_data table.\n" .
             "Please grant permissions:\n" .
             "  sudo -u postgres psql -d " . $dbh->{pg_db} . "\n" .
-            "  GRANT SELECT ON af_kmersearch TO $username;\n" .
+            "  GRANT SELECT ON kafsss_data TO $username;\n" .
             "  \\q\n";
     }
     
@@ -316,7 +316,7 @@ sub validate_database_schema {
     print STDERR "Validating database schema...\n";
     
     # Check if required tables exist
-    my @required_tables = ('af_kmersearch_meta', 'af_kmersearch');
+    my @required_tables = ('kafsss_meta', 'kafsss_data');
     
     for my $table (@required_tables) {
         my $sth = $dbh->prepare("SELECT 1 FROM information_schema.tables WHERE table_name = ?");

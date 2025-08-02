@@ -26,14 +26,14 @@ my $default_mode = 'normal';
 my $default_minpsharedkey = 0.9;
 
 # Job management settings
-my $job_file = '.af_kmersearchclient';
+my $job_file = '.kafsssearchclient';
 my @polling_intervals = (5, 10, 20, 30);  # 5s, 10s, 20s, 30s, then 60s
 
 # Command line options
 my $server = '';
 my $serverlist = '';
 my $database = '';  # Now optional
-my $partition = '';
+my $subset = '';
 my $maxnseq = $default_maxnseq;
 my $minscore = undef;
 my $minpsharedkey = $default_minpsharedkey;
@@ -57,7 +57,7 @@ GetOptions(
     'server=s' => \$server,
     'serverlist=s' => \$serverlist,
     'db=s' => \$database,
-    'partition=s' => \$partition,
+    'subset=s' => \$subset,
     'maxnseq=i' => \$maxnseq,
     'minscore=i' => \$minscore,
     'minpsharedkey=f' => \$minpsharedkey,
@@ -118,7 +118,7 @@ our @global_input_files = ();
 # Check required arguments (skip for resume/jobs/cancel mode)
 unless ($resume_job_id || $cancel_job_id || $show_jobs) {
     if (@ARGV < 2) {
-        die "Usage: af_kmersearchclient [options] input_file(s) output_file\n" .
+        die "Usage: kafsssearchclient [options] input_file(s) output_file\n" .
             "Use --help for detailed usage information.\n";
     }
     
@@ -176,7 +176,7 @@ unless ($resume_job_id || $cancel_job_id || $show_jobs) {
     validate_server_connectivity();
 }
 
-print "af_kmersearchclient version $VERSION\n";
+print "kafsssearchclient version $VERSION\n";
 print "Input files (" . scalar(@global_input_files) . "):\n";
 for my $i (0..$#global_input_files) {
     print "  " . ($i + 1) . ". $global_input_files[$i]\n";
@@ -185,7 +185,7 @@ print "Output file: $global_output_file\n";
 print "Server: " . ($server ? $server : 'none') . "\n";
 print "Server list file: " . ($serverlist ? $serverlist : 'none') . "\n";
 print "Database: $database\n";
-print "Partition: " . ($partition ? $partition : 'all') . "\n";
+print "Subset: " . ($subset ? $subset : 'all') . "\n";
 print "Max sequences: $maxnseq\n";
 print "Min score: " . (defined $minscore ? $minscore : 'default') . "\n";
 print "Min shared key rate: $minpsharedkey\n";
@@ -298,7 +298,7 @@ sub process_sequences_parallel_streaming {
         if ($fasta_entry && scalar(keys %active_children) < $numthreads) {
             $query_count++;
             my $global_query_number = $query_count;
-            my ($temp_fh, $temp_file) = tempfile("af_kmersearchclient_$$" . "_$global_query_number" . "_XXXXXX", UNLINK => 0);
+            my ($temp_fh, $temp_file) = tempfile("kafsssearchclient_$$" . "_$global_query_number" . "_XXXXXX", UNLINK => 0);
             close($temp_fh);
             
             my $pid = fork();
@@ -455,7 +455,7 @@ sub process_single_sequence_client {
             sequence => $fasta_entry->{sequence}
         }],
         database => $database,
-        partition => $partition,
+        subset => $subset,
         maxnseq => $maxnseq,
         mode => $mode
     };
@@ -511,7 +511,7 @@ sub submit_search_job {
     my $job_data = {
         sequences => \@sequences,
         database => $database,
-        partition => $partition,
+        subset => $subset,
         maxnseq => $maxnseq,
         mode => $mode
     };
@@ -533,7 +533,7 @@ sub make_job_submission_request {
     
     my $ua = LWP::UserAgent->new(
         timeout => 30,
-        agent => "af_kmersearchclient/$VERSION"
+        agent => "kafsssearchclient/$VERSION"
     );
     
     # Convert server URL to submission endpoint
@@ -639,7 +639,7 @@ sub get_job_status {
     
     my $ua = LWP::UserAgent->new(
         timeout => 30,
-        agent => "af_kmersearchclient/$VERSION"
+        agent => "kafsssearchclient/$VERSION"
     );
     
     my $server_url = get_next_server_url();
@@ -667,7 +667,7 @@ sub get_job_results {
     
     my $ua = LWP::UserAgent->new(
         timeout => 60,  # Longer timeout for results
-        agent => "af_kmersearchclient/$VERSION"
+        agent => "kafsssearchclient/$VERSION"
     );
     
     my $server_url = get_next_server_url();
@@ -709,7 +709,7 @@ sub validate_server_metadata {
     for my $server_url (@server_urls) {
         my $ua = LWP::UserAgent->new(
             timeout => 10,
-            agent => "af_kmersearchclient/$VERSION"
+            agent => "kafsssearchclient/$VERSION"
         );
         
         # Try to get server metadata
@@ -950,12 +950,12 @@ sub send_cancel_request {
 
 sub print_help {
     print <<EOF;
-af_kmersearchclient version $VERSION
+kafsssearchclient version $VERSION
 
-Usage: af_kmersearchclient [options] input_file(s) output_file
-       af_kmersearchclient --resume=JOB_ID
-       af_kmersearchclient --cancel=JOB_ID
-       af_kmersearchclient --jobs
+Usage: kafsssearchclient [options] input_file(s) output_file
+       kafsssearchclient --resume=JOB_ID
+       kafsssearchclient --cancel=JOB_ID
+       kafsssearchclient --jobs
 
 Search DNA sequences from multiple sources against remote af_kmersearch server using k-mer similarity.
 This client now supports asynchronous job processing with automatic polling and resume functionality.
@@ -982,7 +982,7 @@ Job management options:
 
 Other options:
   --db=DATABASE     PostgreSQL database name (optional if server has default)
-  --partition=NAME  Limit search to specific partition (optional)
+  --subset=NAME  Limit search to specific subset (optional)
   --maxnseq=INT     Maximum number of results per query (default: 1000)
   --minscore=INT    Minimum score threshold (optional, uses server default if not set)
   --minpsharedkey=REAL  Minimum percentage of shared keys (0.0-1.0, default: 0.9)
@@ -1006,7 +1006,7 @@ Polling behavior:
   - 5th+ checks: every 60 seconds until completion
 
 Job persistence:
-  Job information is saved to '.af_kmersearchclient' in the current directory.
+  Job information is saved to '.kafsssearchclient' in the current directory.
   If a job is interrupted, use --resume=JOB_ID to continue polling.
   Use --jobs to see all active jobs.
 
@@ -1060,22 +1060,22 @@ Authentication:
 
 Examples:
   # Submit new job
-  af_kmersearchclient --server=localhost --db=mydb query.fasta results.tsv
+  kafsssearchclient --server=localhost --db=mydb query.fasta results.tsv
   
   # Resume interrupted job
-  af_kmersearchclient --resume=20250703T143052-abc123def456
+  kafsssearchclient --resume=20250703T143052-abc123def456
   
   # Cancel running job
-  af_kmersearchclient --cancel=20250703T143052-abc123def456
+  kafsssearchclient --cancel=20250703T143052-abc123def456
   
   # List active jobs
-  af_kmersearchclient --jobs
+  kafsssearchclient --jobs
   
   # Multiple files with authentication
-  af_kmersearchclient --server=https://server.com --netrc-file=.netrc file1.fasta file2.fasta results.tsv
+  kafsssearchclient --server=https://server.com --netrc-file=.netrc file1.fasta file2.fasta results.tsv
   
   # Server with default database
-  af_kmersearchclient --server=localhost:8080 'queries/*.fasta' results.tsv
+  kafsssearchclient --server=localhost:8080 'queries/*.fasta' results.tsv
 
 EOF
 }
@@ -1264,7 +1264,7 @@ sub open_input_file {
         print "Using blastdbcmd for BLAST database: $filename\n" if $verbose;
         
         # BLAST nucleotide database
-        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '1000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
+        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '10000000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
         return $fh;
     }
     

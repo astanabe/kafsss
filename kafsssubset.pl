@@ -25,7 +25,7 @@ my $port = $default_port;
 my $username = $default_user;
 my $numthreads = $default_numthreads;
 my $batchsize = $default_batchsize;
-my @partitions = ();
+my @subsets = ();
 my $mode = 'add';
 my $verbose = 0;
 my $help = 0;
@@ -37,7 +37,7 @@ GetOptions(
     'username=s' => \$username,
     'numthreads=i' => \$numthreads,
     'batchsize=i' => \$batchsize,
-    'partition=s' => \@partitions,
+    'subset=s' => \@subsets,
     'mode=s' => \$mode,
     'verbose|v' => \$verbose,
     'help|h' => \$help,
@@ -51,7 +51,7 @@ if ($help) {
 
 # Check required arguments
 if (@ARGV != 2) {
-    die "Usage: af_kmerpart [options] input_file database_name\n" .
+    die "Usage: kafsssubset [options] input_file database_name\n" .
         "Use --help for detailed usage information.\n";
 }
 
@@ -63,7 +63,7 @@ unless ($input_file eq '-' || $input_file eq 'stdin' || $input_file eq 'STDIN' |
 }
 
 # Validate required options
-die "Partition name must be specified with --partition option\n" unless @partitions;
+die "Subset name must be specified with --subset option\n" unless @subsets;
 
 # Validate mode option
 die "Mode must be 'add' or 'del'\n" unless $mode eq 'add' || $mode eq 'del';
@@ -74,24 +74,24 @@ die "numthreads must be positive integer\n" unless $numthreads > 0;
 # Validate batchsize
 die "batchsize must be positive integer\n" unless $batchsize > 0;
 
-# Parse partitions from comma-separated values
-my @all_partitions = ();
-for my $partition_spec (@partitions) {
-    push @all_partitions, split(/,/, $partition_spec);
+# Parse subsets from comma-separated values
+my @all_subsets = ();
+for my $subset_spec (@subsets) {
+    push @all_subsets, split(/,/, $subset_spec);
 }
 
 # Remove duplicates
 my %seen = ();
-@all_partitions = grep { !$seen{$_}++ } @all_partitions;
+@all_subsets = grep { !$seen{$_}++ } @all_subsets;
 
-# Validate partition names
-for my $partition (@all_partitions) {
-    if ($mode eq 'add' && $partition eq 'all') {
-        die "Partition name 'all' is not allowed in add mode\n";
+# Validate subset names
+for my $subset (@all_subsets) {
+    if ($mode eq 'add' && $subset eq 'all') {
+        die "Subset name 'all' is not allowed in add mode\n";
     }
 }
 
-print "af_kmerpart version $VERSION\n";
+print "kafsssubset version $VERSION\n";
 print "Mode: $mode\n";
 print "Input file: $input_file\n";
 print "Database: $database_name\n";
@@ -100,7 +100,7 @@ print "Port: $port\n";
 print "Username: $username\n";
 print "Number of threads: $numthreads\n";
 print "Batch size: $batchsize\n";
-print "Partitions: " . join(', ', @all_partitions) . "\n";
+print "Subsets: " . join(', ', @all_subsets) . "\n";
 
 # Connect to PostgreSQL server for validation
 my $password = $ENV{PGPASSWORD} || '';
@@ -159,8 +159,8 @@ if ($input_file eq 'all') {
     process_accessions_batch_streaming($input_file);
 }
 
-# Update statistics in af_kmersearch_meta table
-print "Updating statistics in af_kmersearch_meta table...\n";
+# Update statistics in kafsss_meta table
+print "Updating statistics in kafsss_meta table...\n";
 update_meta_statistics($database_name);
 
 # Advisory lock is automatically released when the original connection was closed
@@ -176,11 +176,11 @@ exit 0;
 
 sub print_help {
     print <<EOF;
-af_kmerpart version $VERSION
+kafsssubset version $VERSION
 
-Usage: af_kmerpart [options] input_file database_name
+Usage: kafsssubset [options] input_file database_name
 
-Update partition information in af_kmersearch database for specified accession numbers.
+Update subset information in kafsss database for specified accession numbers.
 
 Required arguments:
   input_file        Input file with accession numbers (one per line), or 'all' for all rows
@@ -188,8 +188,8 @@ Required arguments:
   database_name     PostgreSQL database name
 
 Required options:
-  --partition=NAME  Partition name to add/remove (can be specified multiple times or comma-separated)
-                    Use 'all' to target all partitions (only in del mode)
+  --subset=NAME  Subset name to add/remove (can be specified multiple times or comma-separated)
+                    Use 'all' to target all subsets (only in del mode)
 
 Other options:
   --mode=MODE       Operation mode: 'add' (default) or 'del'
@@ -208,18 +208,18 @@ Environment variables:
   PGPASSWORD       PostgreSQL password
 
 Examples:
-  # Add partitions
-  af_kmerpart --partition=bacteria accessions.txt mydb
-  af_kmerpart --partition=bacteria,archaea accessions.txt mydb
-  af_kmerpart --numthreads=4 --partition=viruses accessions.txt mydb
+  # Add subsets
+  kafsssubset --subset=bacteria accessions.txt mydb
+  kafsssubset --subset=bacteria,archaea accessions.txt mydb
+  kafsssubset --numthreads=4 --subset=viruses accessions.txt mydb
   
-  # Remove partitions
-  af_kmerpart --mode=del --partition=bacteria accessions.txt mydb
-  af_kmerpart --mode=del --partition=archaea all mydb
-  af_kmerpart --mode=del --partition=all all mydb
+  # Remove subsets
+  kafsssubset --mode=del --subset=bacteria accessions.txt mydb
+  kafsssubset --mode=del --subset=archaea all mydb
+  kafsssubset --mode=del --subset=all all mydb
   
   # Standard input
-  echo -e "AB123456\nCD789012" | af_kmerpart --partition=bacteria stdin mydb
+  echo -e "AB123456\nCD789012" | kafsssubset --subset=bacteria stdin mydb
 
 EOF
 }
@@ -425,17 +425,17 @@ sub validate_database_permissions {
             "  \\q\n";
     }
     
-    # Check table permissions - af_kmerpart needs SELECT, INSERT, UPDATE, DELETE
-    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'af_kmersearch', 'SELECT, INSERT, UPDATE, DELETE')");
+    # Check table permissions - kafsssubset needs SELECT, INSERT, UPDATE, DELETE
+    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'kafsss_data', 'SELECT, INSERT, UPDATE, DELETE')");
     $sth->execute($username);
     my $has_table_perm = $sth->fetchrow_array();
     $sth->finish();
     
     unless ($has_table_perm) {
-        die "Error: User '$username' does not have sufficient permissions on af_kmersearch table.\n" .
+        die "Error: User '$username' does not have sufficient permissions on kafsss_data table.\n" .
             "Please grant permissions:\n" .
             "  sudo -u postgres psql -d " . $dbh->{pg_db} . "\n" .
-            "  GRANT SELECT, INSERT, UPDATE, DELETE ON af_kmersearch TO $username;\n" .
+            "  GRANT SELECT, INSERT, UPDATE, DELETE ON kafsss_data TO $username;\n" .
             "  \\q\n";
     }
     
@@ -448,7 +448,7 @@ sub validate_database_schema {
     print "Validating database schema...\n";
     
     # Check if required tables exist
-    my @required_tables = ('af_kmersearch_meta', 'af_kmersearch');
+    my @required_tables = ('kafsss_meta', 'kafsss_data');
     
     for my $table (@required_tables) {
         my $sth = $dbh->prepare("SELECT 1 FROM information_schema.tables WHERE table_name = ?");
@@ -469,25 +469,25 @@ sub validate_database_schema {
 sub verify_database_structure {
     my ($dbh) = @_;
     
-    # Check if af_kmersearch table exists
+    # Check if kafsss_data table exists
     my $sth = $dbh->prepare(<<SQL);
 SELECT COUNT(*)
 FROM information_schema.tables 
-WHERE table_name = 'af_kmersearch'
+WHERE table_name = 'kafsss_data'
 SQL
     $sth->execute();
     my ($table_count) = $sth->fetchrow_array();
     $sth->finish();
     
-    die "Table 'af_kmersearch' does not exist in database '$database_name'\n" 
+    die "Table 'kafsss_data' does not exist in database '$database_name'\n" 
         unless $table_count > 0;
     
     # Check if required columns exist with correct types
     $sth = $dbh->prepare(<<SQL);
 SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
 FROM information_schema.columns 
-WHERE table_name = 'af_kmersearch'
-AND column_name IN ('seq', 'part', 'seqid')
+WHERE table_name = 'kafsss_data'
+AND column_name IN ('seq', 'subset', 'seqid')
 ORDER BY column_name
 SQL
     $sth->execute();
@@ -498,10 +498,10 @@ SQL
     }
     $sth->finish();
     
-    die "Required columns not found in table 'af_kmersearch'\n"
-        unless exists $columns{seq} && exists $columns{part} && exists $columns{seqid};
+    die "Required columns not found in table 'kafsss_data'\n"
+        unless exists $columns{seq} && exists $columns{subset} && exists $columns{seqid};
     
-    die "Column 'part' must be ARRAY type\n" unless $columns{part} eq 'ARRAY';
+    die "Column 'subset' must be ARRAY type\n" unless $columns{subset} eq 'ARRAY';
     die "Column 'seqid' must be ARRAY type\n" unless $columns{seqid} eq 'ARRAY';
     die "Column 'seq' must be DNA2 or DNA4 type\n" 
         unless lc($columns{seq}) eq 'dna2' || lc($columns{seq}) eq 'dna4';
@@ -512,26 +512,26 @@ SQL
 sub check_meta_table_compatibility {
     my ($dbh) = @_;
     
-    print "Checking af_kmersearch_meta table compatibility...\n";
+    print "Checking kafsss_meta table compatibility...\n";
     
-    # Check if af_kmersearch_meta table exists
+    # Check if kafsss_meta table exists
     my $sth = $dbh->prepare(<<SQL);
 SELECT COUNT(*)
 FROM information_schema.tables 
-WHERE table_name = 'af_kmersearch_meta'
+WHERE table_name = 'kafsss_meta'
 SQL
     $sth->execute();
     my ($meta_table_count) = $sth->fetchrow_array();
     $sth->finish();
     
-    die "Table 'af_kmersearch_meta' does not exist in database '$database_name'\n" 
+    die "Table 'kafsss_meta' does not exist in database '$database_name'\n" 
         unless $meta_table_count > 0;
     
     # Check if new columns exist (added by updated af_kmerstore)
     $sth = $dbh->prepare(<<SQL);
 SELECT column_name
 FROM information_schema.columns 
-WHERE table_name = 'af_kmersearch_meta'
+WHERE table_name = 'kafsss_meta'
 AND column_name IN ('kmer_size', 'occur_bitlen', 'max_appearance_rate', 'max_appearance_nrow')
 ORDER BY column_name
 SQL
@@ -594,25 +594,25 @@ sub process_single_accession {
     my $clean_accession = remove_version_number($accession);
     
     if ($mode eq 'add') {
-        # Add partitions: combine existing partitions with new ones
+        # Add subsets: combine existing subsets with new ones
         my $update_sth = $dbh->prepare(<<SQL);
-UPDATE af_kmersearch 
-SET part = (
+UPDATE kafsss_data 
+SET subset = (
     SELECT array_agg(DISTINCT e) 
-    FROM unnest(part || ?) AS e
+    FROM unnest(subset || ?) AS e
 ) 
 WHERE EXISTS (
     SELECT 1 
     FROM unnest(seqid) AS s 
-    WHERE split_part(s, ':', 1) = ?
+    WHERE split_subset(s, ':', 1) = ?
 )
 SQL
         
         eval {
-            my $rows_updated = $update_sth->execute(\@all_partitions, $clean_accession);
+            my $rows_updated = $update_sth->execute(\@all_subsets, $clean_accession);
             
             if ($rows_updated && $rows_updated > 0) {
-                print "Added partitions to $rows_updated rows for accession '$accession' (cleaned: '$clean_accession')\n";
+                print "Added subsets to $rows_updated rows for accession '$accession' (cleaned: '$clean_accession')\n";
             } else {
                 print "No rows found for accession '$accession' (cleaned: '$clean_accession')\n";
             }
@@ -625,16 +625,16 @@ SQL
         $update_sth->finish();
         
     } elsif ($mode eq 'del') {
-        # Remove partitions
-        if (grep { $_ eq 'all' } @all_partitions) {
-            # Remove all partitions (set part to empty array)
+        # Remove subsets
+        if (grep { $_ eq 'all' } @all_subsets) {
+            # Remove all subsets (set subset to empty array)
             my $update_sth = $dbh->prepare(<<SQL);
-UPDATE af_kmersearch 
-SET part = '{}'::text[]
+UPDATE kafsss_data 
+SET subset = '{}'::text[]
 WHERE EXISTS (
     SELECT 1 
     FROM unnest(seqid) AS s 
-    WHERE split_part(s, ':', 1) = ?
+    WHERE split_subset(s, ':', 1) = ?
 )
 SQL
             
@@ -642,7 +642,7 @@ SQL
                 my $rows_updated = $update_sth->execute($clean_accession);
                 
                 if ($rows_updated && $rows_updated > 0) {
-                    print "Removed all partitions from $rows_updated rows for accession '$accession' (cleaned: '$clean_accession')\n";
+                    print "Removed all subsets from $rows_updated rows for accession '$accession' (cleaned: '$clean_accession')\n";
                 } else {
                     print "No rows found for accession '$accession' (cleaned: '$clean_accession')\n";
                 }
@@ -655,26 +655,26 @@ SQL
             $update_sth->finish();
             
         } else {
-            # Remove specific partitions
+            # Remove specific subsets
             my $update_sth = $dbh->prepare(<<SQL);
-UPDATE af_kmersearch 
-SET part = (
+UPDATE kafsss_data 
+SET subset = (
     SELECT array_agg(e) 
-    FROM unnest(part) AS e 
+    FROM unnest(subset) AS e 
     WHERE e != ALL(?)
 ) 
 WHERE EXISTS (
     SELECT 1 
     FROM unnest(seqid) AS s 
-    WHERE split_part(s, ':', 1) = ?
+    WHERE split_subset(s, ':', 1) = ?
 )
 SQL
             
             eval {
-                my $rows_updated = $update_sth->execute(\@all_partitions, $clean_accession);
+                my $rows_updated = $update_sth->execute(\@all_subsets, $clean_accession);
                 
                 if ($rows_updated && $rows_updated > 0) {
-                    print "Removed specified partitions from $rows_updated rows for accession '$accession' (cleaned: '$clean_accession')\n";
+                    print "Removed specified subsets from $rows_updated rows for accession '$accession' (cleaned: '$clean_accession')\n";
                 } else {
                     print "No rows found for accession '$accession' (cleaned: '$clean_accession')\n";
                 }
@@ -713,7 +713,7 @@ sub process_all_rows {
     }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
     
     # Get total number of rows for progress tracking
-    my $sth = $temp_dbh->prepare("SELECT COUNT(*) FROM af_kmersearch");
+    my $sth = $temp_dbh->prepare("SELECT COUNT(*) FROM kafsss_data");
     $sth->execute();
     my ($total_rows) = $sth->fetchrow_array();
     $sth->finish();
@@ -797,59 +797,59 @@ sub process_all_rows_batch_items {
         $child_dbh->begin_work;
         
         if ($mode eq 'add') {
-            # Add partitions to all rows
+            # Add subsets to all rows
             my $update_sth = $child_dbh->prepare(<<SQL);
-UPDATE af_kmersearch 
-SET part = (
+UPDATE kafsss_data 
+SET subset = (
     SELECT array_agg(DISTINCT e) 
-    FROM unnest(part || ?) AS e
+    FROM unnest(subset || ?) AS e
 )
 WHERE ctid IN (
-    SELECT ctid FROM af_kmersearch 
+    SELECT ctid FROM kafsss_data 
     ORDER BY ctid 
     LIMIT ? OFFSET ?
 )
 SQL
             
-            my $rows_updated = $update_sth->execute(\@all_partitions, $limit, $offset);
-            print "Added partitions to $rows_updated rows in batch (offset: $offset)\n";
+            my $rows_updated = $update_sth->execute(\@all_subsets, $limit, $offset);
+            print "Added subsets to $rows_updated rows in batch (offset: $offset)\n";
             $update_sth->finish();
             
         } elsif ($mode eq 'del') {
-            if (grep { $_ eq 'all' } @all_partitions) {
-                # Remove all partitions from all rows
+            if (grep { $_ eq 'all' } @all_subsets) {
+                # Remove all subsets from all rows
                 my $update_sth = $child_dbh->prepare(<<SQL);
-UPDATE af_kmersearch 
-SET part = '{}'::text[]
+UPDATE kafsss_data 
+SET subset = '{}'::text[]
 WHERE ctid IN (
-    SELECT ctid FROM af_kmersearch 
+    SELECT ctid FROM kafsss_data 
     ORDER BY ctid 
     LIMIT ? OFFSET ?
 )
 SQL
                 
                 my $rows_updated = $update_sth->execute($limit, $offset);
-                print "Removed all partitions from $rows_updated rows in batch (offset: $offset)\n";
+                print "Removed all subsets from $rows_updated rows in batch (offset: $offset)\n";
                 $update_sth->finish();
                 
             } else {
-                # Remove specific partitions from all rows
+                # Remove specific subsets from all rows
                 my $update_sth = $child_dbh->prepare(<<SQL);
-UPDATE af_kmersearch 
-SET part = (
+UPDATE kafsss_data 
+SET subset = (
     SELECT array_agg(e) 
-    FROM unnest(part) AS e 
+    FROM unnest(subset) AS e 
     WHERE e != ALL(?)
 )
 WHERE ctid IN (
-    SELECT ctid FROM af_kmersearch 
+    SELECT ctid FROM kafsss_data 
     ORDER BY ctid 
     LIMIT ? OFFSET ?
 )
 SQL
                 
-                my $rows_updated = $update_sth->execute(\@all_partitions, $limit, $offset);
-                print "Removed specified partitions from $rows_updated rows in batch (offset: $offset)\n";
+                my $rows_updated = $update_sth->execute(\@all_subsets, $limit, $offset);
+                print "Removed specified subsets from $rows_updated rows in batch (offset: $offset)\n";
                 $update_sth->finish();
             }
         }
@@ -883,13 +883,13 @@ sub update_meta_statistics {
     print "Calculating total sequence statistics...\n";
     
     # Get datatype from existing meta table to determine bit calculation
-    my $sth = $dbh->prepare("SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type FROM information_schema.columns WHERE table_name = 'af_kmersearch' AND column_name = 'seq'");
+    my $sth = $dbh->prepare("SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type FROM information_schema.columns WHERE table_name = 'kafsss_data' AND column_name = 'seq'");
     $sth->execute();
     my ($col_name, $datatype) = $sth->fetchrow_array();
     $sth->finish();
     
     if (!$datatype) {
-        die "Cannot determine datatype from af_kmersearch table\n";
+        die "Cannot determine datatype from kafsss_data table\n";
     }
     
     # Calculate total number of sequences and total bases using accurate nuc_length() function
@@ -897,7 +897,7 @@ sub update_meta_statistics {
 SELECT 
     COUNT(*) as nseq,
     SUM(nuc_length(seq)) as total_nchar
-FROM af_kmersearch
+FROM kafsss_data
 SQL
     
     $sth->execute();
@@ -906,55 +906,55 @@ SQL
     
     print "Total sequences: $nseq, Total bases: $nchar\n";
     
-    # Calculate partition-specific statistics with single query
-    print "Calculating partition-specific statistics...\n";
+    # Calculate subset-specific statistics with single query
+    print "Calculating subset-specific statistics...\n";
     
     $sth = $dbh->prepare(<<SQL);
 SELECT 
-    partition_name, 
+    subset_name, 
     COUNT(*) AS nseq, 
     SUM(nuc_length(seq)) AS total_nchar 
 FROM (
-    SELECT unnest(part) AS partition_name, seq 
-    FROM af_kmersearch 
-    WHERE part IS NOT NULL AND array_length(part, 1) > 0
-) AS unnested_parts 
-GROUP BY partition_name
+    SELECT unnest(subset) AS subset_name, seq 
+    FROM kafsss_data 
+    WHERE subset IS NOT NULL AND array_length(subset, 1) > 0
+) AS unnested_subsets 
+GROUP BY subset_name
 SQL
     
     $sth->execute();
-    my %partition_stats = ();
+    my %subset_stats = ();
     
-    while (my ($partition, $part_nseq, $part_nchar) = $sth->fetchrow_array()) {
-        $partition_stats{$partition} = {
-            nseq => $part_nseq,
-            nchar => $part_nchar
+    while (my ($subset, $subset_nseq, $subset_nchar) = $sth->fetchrow_array()) {
+        $subset_stats{$subset} = {
+            nseq => $subset_nseq,
+            nchar => $subset_nchar
         };
         
-        print "  Partition '$partition': $part_nseq sequences, $part_nchar bases\n";
+        print "  Subset '$subset': $subset_nseq sequences, $subset_nchar bases\n";
     }
     $sth->finish();
     
-    # Prepare partition statistics JSON
-    my $part_json = encode_json(\%partition_stats);
+    # Prepare subset statistics JSON
+    my $subset_json = encode_json(\%subset_stats);
     
-    # Update af_kmersearch_meta table (preserve existing kmer-related columns)
-    print "Updating af_kmersearch_meta table with statistics...\n";
+    # Update kafsss_meta table (preserve existing kmer-related columns)
+    print "Updating kafsss_meta table with statistics...\n";
     
     $sth = $dbh->prepare(<<SQL);
-UPDATE af_kmersearch_meta 
-SET nseq = ?, nchar = ?, part = ?
+UPDATE kafsss_meta 
+SET nseq = ?, nchar = ?, subset = ?
 SQL
     
     eval {
         $dbh->begin_work;
-        $sth->execute($nseq, $nchar, $part_json);
+        $sth->execute($nseq, $nchar, $subset_json);
         $dbh->commit;
         print "Transaction committed successfully for statistics update.\n";
     };
     
     if ($@) {
-        print STDERR "Error updating af_kmersearch_meta statistics: $@\n";
+        print STDERR "Error updating kafsss_meta statistics: $@\n";
         eval { $dbh->rollback; };
         $sth->finish();
         $dbh->disconnect();

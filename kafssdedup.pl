@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Getopt::Long;
 use DBI;
+use JSON;
 use POSIX qw(strftime);
 use Sys::Hostname;
 use File::Basename;
@@ -46,13 +47,13 @@ if ($help) {
 
 # Check required arguments
 if (@ARGV != 1) {
-    die "Usage: af_kmerdedup [options] database_name\n" .
+    die "Usage: kafssdedup [options] database_name\n" .
         "Use --help for detailed usage information.\n";
 }
 
 my ($database_name) = @ARGV;
 
-print "af_kmerdedup version $VERSION\n";
+print "kafssdedup version $VERSION\n";
 print "Database: $database_name\n";
 print "Host: $host\n";
 print "Port: $port\n";
@@ -88,11 +89,11 @@ my $dbh = DBI->connect($dsn, $username, $password, {
     pg_enable_utf8 => 1
 }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
 
-# Check if af_kmersearch table exists
-ensure_table_exists($dbh, 'af_kmersearch');
+# Check if kafsss_data table exists
+ensure_table_exists($dbh, 'kafsss_data');
 
-# Detect existing compression attributes from af_kmersearch table
-print "Detecting compression attributes from af_kmersearch table...\n" if $verbose;
+# Detect existing compression attributes from kafsss_data table
+print "Detecting compression attributes from kafsss_data table...\n" if $verbose;
 my ($storage_attr, $compression_attr) = detect_table_compression_attributes($dbh);
 
 # Acquire advisory lock for exclusive access
@@ -143,14 +144,18 @@ print "Starting deduplication process...\n";
 my $duplicate_count = deduplicate_sequences_simple($dbh);
 
 # Verify table exists after deduplication
-ensure_table_exists($dbh, 'af_kmersearch');
+ensure_table_exists($dbh, 'kafsss_data');
 
 # Final verification with record count
-my $final_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch");
+my $final_count = $dbh->selectrow_array("SELECT COUNT(*) FROM kafsss_data");
 unless (defined $final_count) {
-    die "Table verification failed: af_kmersearch table missing after deduplication\n";
+    die "Table verification failed: kafsss_data table missing after deduplication\n";
 }
 print "Deduplication verified. Final count: $final_count sequences.\n";
+
+# Update kafsss_meta table with new statistics
+print "Updating kafsss_meta table with new statistics...\n";
+update_meta_statistics($dbh);
 
 print "Deduplication completed successfully.\n";
 
@@ -164,14 +169,14 @@ exit 0;
 
 sub print_help {
     print <<EOF;
-af_kmerdedup version $VERSION
+kafssdedup version $VERSION
 
-Usage: af_kmerdedup [options] database_name
+Usage: kafssdedup [options] database_name
 
-Remove duplicate sequences from af_kmersearch table in PostgreSQL database using pg_kmersearch extension.
+Remove duplicate sequences from kafsss_data table in PostgreSQL database using pg_kmersearch extension.
 
 Required arguments:
-  database_name     Target database name containing af_kmersearch table
+  database_name     Target database name containing kafsss_data table
 
 Options:
   --host=HOST                      PostgreSQL server host (default: \$PGHOST or localhost)
@@ -191,18 +196,18 @@ Environment variables:
 
 Examples:
   # Basic deduplication
-  af_kmerdedup mydb
+  kafssdedup mydb
   
   # With custom memory settings
-  af_kmerdedup --workingmemory=32GB mydb
-  af_kmerdedup --workingmemory=64GB --maintenanceworkingmemory=16GB mydb
-  af_kmerdedup --workingmemory=32GB --temporarybuffer=1GB mydb
+  kafssdedup --workingmemory=32GB mydb
+  kafssdedup --workingmemory=64GB --maintenanceworkingmemory=16GB mydb
+  kafssdedup --workingmemory=32GB --temporarybuffer=1GB mydb
   
   # With remote database
-  af_kmerdedup --host=dbserver --username=myuser mydb
+  kafssdedup --host=dbserver --username=myuser mydb
   
   # With verbose output
-  af_kmerdedup --verbose --workingmemory=48GB mydb
+  kafssdedup --verbose --workingmemory=48GB mydb
 
 EOF
 }
@@ -283,71 +288,71 @@ sub deduplicate_sequences_simple {
     eval {
         $dbh->begin_work;
         
-        my $original_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch");
+        my $original_count = $dbh->selectrow_array("SELECT COUNT(*) FROM kafsss_data");
         print "Original sequence count: $original_count\n";
         
         # Phase 1: Identify duplicate sequences
         print "Phase 1: Identifying duplicate sequences...\n";
-        $dbh->do("DROP TABLE IF EXISTS af_kmersearch_dupseq");
+        $dbh->do("DROP TABLE IF EXISTS kafsss_data_dupseq");
         $dbh->do(<<SQL);
-CREATE TABLE af_kmersearch_dupseq AS 
+CREATE TABLE kafsss_data_dupseq AS 
 SELECT seq 
-FROM af_kmersearch 
+FROM kafsss_data 
 GROUP BY seq 
 HAVING COUNT(*) > 1
 SQL
         
-        # Apply compression attributes to af_kmersearch_dupseq table
-        apply_table_compression($dbh, 'af_kmersearch_dupseq', ['seq'], $storage_attr, $compression_attr);
+        # Apply compression attributes to kafsss_data_dupseq table
+        apply_table_compression($dbh, 'kafsss_data_dupseq', ['seq'], $storage_attr, $compression_attr);
         
-        my $duplicate_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch_dupseq");
+        my $duplicate_count = $dbh->selectrow_array("SELECT COUNT(*) FROM kafsss_data_dupseq");
         print "Found $duplicate_count unique sequences with duplicates.\n";
         
         if ($duplicate_count > 0) {
             # Phase 2: Process only duplicate data
             print "Phase 2: Processing duplicate sequences...\n";
-            $dbh->do("DROP TABLE IF EXISTS af_kmersearch_dedup_temp");
+            $dbh->do("DROP TABLE IF EXISTS kafsss_data_dedup_temp");
             $dbh->do(<<SQL);
-CREATE TABLE af_kmersearch_dedup_temp AS
+CREATE TABLE kafsss_data_dedup_temp AS
 SELECT 
     a.seq,
-    array_uniq(array_cat_agg(a.part)) as part,
+    array_uniq(array_cat_agg(a.subset)) as subset,
     array_uniq(array_cat_agg(a.seqid)) as seqid
-FROM af_kmersearch a
-JOIN af_kmersearch_dupseq d ON d.seq = a.seq
+FROM kafsss_data a
+JOIN kafsss_data_dupseq d ON d.seq = a.seq
 GROUP BY a.seq
 SQL
             
-            # Apply compression attributes to af_kmersearch_dedup_temp table
-            apply_table_compression($dbh, 'af_kmersearch_dedup_temp', ['seq', 'part', 'seqid'], $storage_attr, $compression_attr);
+            # Apply compression attributes to kafsss_data_dedup_temp table
+            apply_table_compression($dbh, 'kafsss_data_dedup_temp', ['seq', 'subset', 'seqid'], $storage_attr, $compression_attr);
             
-            my $dedup_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch_dedup_temp");
+            my $dedup_count = $dbh->selectrow_array("SELECT COUNT(*) FROM kafsss_data_dedup_temp");
             print "Created $dedup_count deduplicated records from duplicates.\n";
             
             # Phase 3: Remove duplicate rows from original table
             print "Phase 3: Removing duplicate sequences from original table...\n";
             my $deleted_count = $dbh->do(<<SQL);
-DELETE FROM af_kmersearch 
-WHERE seq IN (SELECT seq FROM af_kmersearch_dupseq)
+DELETE FROM kafsss_data 
+WHERE seq IN (SELECT seq FROM kafsss_data_dupseq)
 SQL
             print "Removed $deleted_count duplicate rows from original table.\n";
             
             # Phase 4: Insert deduplicated data back and cleanup
             print "Phase 4: Inserting deduplicated data and cleanup...\n";
             $dbh->do(<<SQL);
-INSERT INTO af_kmersearch 
-SELECT * FROM af_kmersearch_dedup_temp
+INSERT INTO kafsss_data 
+SELECT * FROM kafsss_data_dedup_temp
 SQL
             
-            $dbh->do("DROP TABLE af_kmersearch_dedup_temp");
+            $dbh->do("DROP TABLE kafsss_data_dedup_temp");
             print "Deduplication processing completed.\n";
         } else {
             print "No duplicate sequences found. Skipping deduplication processing.\n";
         }
         
-        $dbh->do("DROP TABLE af_kmersearch_dupseq");
+        $dbh->do("DROP TABLE kafsss_data_dupseq");
         
-        my $new_count = $dbh->selectrow_array("SELECT COUNT(*) FROM af_kmersearch");
+        my $new_count = $dbh->selectrow_array("SELECT COUNT(*) FROM kafsss_data");
         
         $dbh->commit;
         
@@ -371,8 +376,8 @@ sub cleanup_intermediate_tables {
     
     # List of intermediate tables to clean up
     my @cleanup_tables = (
-        'af_kmersearch_dedup_temp',    # Current processing temp table
-        'af_kmersearch_dupseq'         # Current processing duplicate seq table
+        'kafsss_data_dedup_temp',    # Current processing temp table
+        'kafsss_data_dupseq'         # Current processing duplicate seq table
     );
     
     for my $table_name (@cleanup_tables) {
@@ -521,13 +526,13 @@ sub validate_and_set_temp_buffers {
 sub detect_table_compression_attributes {
     my ($dbh) = @_;
     
-    print "Detecting compression attributes from af_kmersearch.seq column...\n" if $verbose;
+    print "Detecting compression attributes from kafsss_data.seq column...\n" if $verbose;
     
     my $sth = $dbh->prepare(<<SQL);
 SELECT attstorage, attcompression 
 FROM pg_attribute 
 JOIN pg_class ON pg_attribute.attrelid = pg_class.oid 
-WHERE pg_class.relname = 'af_kmersearch' 
+WHERE pg_class.relname = 'kafsss_data' 
 AND pg_attribute.attname = 'seq'
 SQL
     
@@ -536,7 +541,7 @@ SQL
     $sth->finish();
     
     unless (defined $storage) {
-        die "Failed to detect storage attribute for af_kmersearch.seq column\n";
+        die "Failed to detect storage attribute for kafsss_data.seq column\n";
     }
     
     # Convert PostgreSQL storage codes to readable names
@@ -581,4 +586,83 @@ sub apply_table_compression {
             print STDERR "Warning: Failed to set compression attributes for $table_name.$column: $@\n";
         }
     }
+}
+
+sub update_meta_statistics {
+    my ($dbh) = @_;
+    
+    print "Calculating new statistics for kafsss_meta table...\n" if $verbose;
+    
+    # Calculate total number of sequences and total bases using accurate nuc_length() function
+    my $sth = $dbh->prepare(<<SQL);
+SELECT 
+    COUNT(*) as nseq,
+    SUM(nuc_length(seq)) as total_nchar
+FROM kafsss_data
+SQL
+    
+    $sth->execute();
+    my ($nseq, $nchar) = $sth->fetchrow_array();
+    $sth->finish();
+    
+    print "Total sequences after deduplication: $nseq\n" if $verbose;
+    print "Total bases after deduplication: $nchar\n" if $verbose;
+    
+    # Calculate subset-specific statistics with single query
+    print "Calculating subset-specific statistics...\n" if $verbose;
+    
+    $sth = $dbh->prepare(<<SQL);
+SELECT 
+    subset_name, 
+    COUNT(*) AS nseq, 
+    SUM(nuc_length(seq)) AS total_nchar 
+FROM (
+    SELECT unnest(subset) AS subset_name, seq 
+    FROM kafsss_data 
+    WHERE subset IS NOT NULL AND array_length(subset, 1) > 0
+) AS unnested_subsets 
+GROUP BY subset_name
+SQL
+    
+    $sth->execute();
+    my %subset_stats = ();
+    
+    while (my ($subset, $subset_nseq, $subset_nchar) = $sth->fetchrow_array()) {
+        $subset_stats{$subset} = {
+            nseq => $subset_nseq,
+            nchar => $subset_nchar
+        };
+        
+        print "  Subset '$subset': $subset_nseq sequences, $subset_nchar bases\n" if $verbose;
+    }
+    $sth->finish();
+    
+    # Prepare subset statistics JSON
+    my $subset_json = encode_json(\%subset_stats);
+    
+    # Update kafsss_meta table
+    print "Updating kafsss_meta table with statistics...\n" if $verbose;
+    
+    $sth = $dbh->prepare(<<SQL);
+UPDATE kafsss_meta 
+SET nseq = ?, nchar = ?, subset = ?
+SQL
+    
+    eval {
+        $dbh->begin_work;
+        $sth->execute($nseq, $nchar, $subset_json);
+        $dbh->commit;
+        print "kafsss_meta table updated successfully.\n" if $verbose;
+    };
+    
+    if ($@) {
+        print STDERR "Error updating kafsss_meta statistics: $@\n";
+        eval { $dbh->rollback; };
+        $sth->finish();
+        die "Failed to update kafsss_meta table: $@\n";
+    }
+    
+    $sth->finish();
+    
+    print "Statistics update completed.\n" if $verbose;
 }
