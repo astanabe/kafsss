@@ -957,7 +957,7 @@ Usage: kafsssearchclient [options] input_file(s) output_file
        kafsssearchclient --cancel=JOB_ID
        kafsssearchclient --jobs
 
-Search DNA sequences from multiple sources against remote af_kmersearch server using k-mer similarity.
+Search DNA sequences from multiple sources against remote kafsss server using k-mer similarity.
 This client now supports asynchronous job processing with automatic polling and resume functionality.
 
 Required arguments (for new jobs):
@@ -982,7 +982,7 @@ Job management options:
 
 Other options:
   --db=DATABASE     PostgreSQL database name (optional if server has default)
-  --subset=NAME  Limit search to specific subset (optional)
+  --subset=NAME     Limit search to specific subset (optional)
   --maxnseq=INT     Maximum number of results per query (default: 1000)
   --minscore=INT    Minimum score threshold (optional, uses server default if not set)
   --minpsharedkey=REAL  Minimum percentage of shared keys (0.0-1.0, default: 0.9)
@@ -1374,7 +1374,7 @@ sub normalize_mode {
     my $normalized = $mode_aliases{lc($mode)};
     return '' unless $normalized;
     
-    # All modes are accepted for af_kmersearch
+    # All modes are accepted for kafsss
     return $normalized;
 }
 

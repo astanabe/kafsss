@@ -114,7 +114,7 @@ validate_user_and_permissions($server_dbh, $username);
 unless (check_database_exists($server_dbh, $database_name)) {
     $server_dbh->disconnect();
     die "Error: Database '$database_name' does not exist.\n" .
-        "Please create it first using af_kmerstore.\n";
+        "Please create it first using kafssstore.\n";
 }
 
 $server_dbh->disconnect();
@@ -211,10 +211,10 @@ Other options:
   --maxpappear=REAL Max k-mer appearance rate (default: 0.5, range: 0.0-1.0)
   --maxnappear=INT  Max rows containing k-mer (default: 0=unlimited)
   --occurbitlen=INT Bits for occurrence count (default: 8, range: 0-16)
-  --numthreads=INT            Number of parallel workers (default: 0=auto)
-  --workingmemory=SIZE        Work memory for each operation (default: 8GB)
+  --numthreads=INT  Number of parallel workers (default: 0=auto)
+  --workingmemory=SIZE  Work memory for each operation (default: 8GB)
   --maintenanceworkingmemory=SIZE  Maintenance work memory (default: 8GB)
-  --temporarybuffer=SIZE      Temporary buffer size (default: 512MB)
+  --temporarybuffer=SIZE  Temporary buffer size (default: 512MB)
   --verbose, -v     Show detailed processing messages (default: false)
   --overwrite       Overwrite existing analysis (only for --mode=create)
   --help, -h        Show this help message
@@ -613,8 +613,8 @@ sub validate_database_schema {
         
         unless ($table_exists) {
             die "Error: Required table '$table' does not exist in database.\n" .
-                "This database may not have been created with af_kmerstore.\n" .
-                "Please create the database properly using af_kmerstore first.\n";
+                "This database may not have been created with kafssstore.\n" .
+                "Please create the database properly using kafssstore first.\n";
         }
     }
     

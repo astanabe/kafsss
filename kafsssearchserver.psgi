@@ -33,7 +33,7 @@ my $default_minscore = '';       # Set default minscore value here (empty = use 
 my $default_minpsharedkey = '';  # Set default minimum shared key rate here (empty = use pg_kmersearch default)
 my $default_mode = 'normal';     # Set default mode (minimum, normal, maximum)
 my $default_listen_port = 5000;  # PSGI server listen port
-my $default_workers = 5;         # Number of worker processes
+my $default_numthreads = 5;      # Number of worker processes
 
 # SQLite job management settings
 my $default_sqlite_path = './kafsssearchserver.sqlite';  # SQLite database path
@@ -50,7 +50,7 @@ my $host = $default_host;
 my $port = $default_port;
 my $username = $default_user;
 my $listen_port = $default_listen_port;
-my $workers = $default_workers;
+my $numthreads = $default_numthreads;
 my $sqlite_path = $default_sqlite_path;
 my $clean_limit = $default_clean_limit;
 my $job_timeout = $default_job_timeout;
@@ -63,13 +63,13 @@ GetOptions(
     'host=s' => \$host,
     'port=i' => \$port,
     'username=s' => \$username,
-    'listen-port=i' => \$listen_port,
-    'workers=i' => \$workers,
-    'sqlite-path=s' => \$sqlite_path,
-    'clean-limit=i' => \$clean_limit,
-    'job-timeout=i' => \$job_timeout,
-    'max-jobs=i' => \$max_jobs,
-    'cleanup-interval=i' => \$cleanup_interval,
+    'listenport=i' => \$listen_port,
+    'numthreads=i' => \$numthreads,
+    'sqlitepath=s' => \$sqlite_path,
+    'cleanlimit=i' => \$clean_limit,
+    'jobtimeout=i' => \$job_timeout,
+    'maxnjob=i' => \$max_jobs,
+    'cleaninterval=i' => \$cleanup_interval,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
 
@@ -88,7 +88,7 @@ print STDERR "PostgreSQL Host: $host\n";
 print STDERR "PostgreSQL Port: $port\n";
 print STDERR "PostgreSQL Username: $username\n";
 print STDERR "Listen Port: $listen_port\n";
-print STDERR "Worker Processes: $workers\n";
+print STDERR "Worker Processes: $numthreads\n";
 print STDERR "SQLite Database: $sqlite_path\n";
 print STDERR "Max concurrent jobs: $max_jobs\n";
 print STDERR "Job timeout: $job_timeout seconds\n";
@@ -120,7 +120,7 @@ if (caller == 0) {
     my $server = Plack::Handler::Starman->new(
         host => '0.0.0.0',
         port => $listen_port,
-        workers => $workers,
+        workers => $numthreads,
     );
     
     $server->run($app);
@@ -139,20 +139,20 @@ kafsssearchserver.psgi version $VERSION
 
 Usage: perl kafsssearchserver.psgi [options]
 
-PSGI server for asynchronous k-mer search using af_kmersearch database.
+PSGI server for asynchronous k-mer search using kafsss database.
 Can be used standalone or with plackup/other PSGI servers.
 
 Options:
   --host=HOST         PostgreSQL server host (default: \$PGHOST or localhost)
   --port=PORT         PostgreSQL server port (default: \$PGPORT or 5432)
   --username=USER     PostgreSQL username (default: \$PGUSER or current user)
-  --listen-port=PORT  HTTP server listen port (default: 5000)
-  --workers=NUM       Number of worker processes (default: 5)
-  --sqlite-path=PATH  SQLite database file path (default: ./kafsssearchserver.sqlite)
-  --clean-limit=INT   Result retention period in seconds (default: 86400)
-  --job-timeout=INT   Job timeout in seconds (default: 1800)
-  --max-jobs=INT      Maximum concurrent jobs (default: 10)
-  --cleanup-interval=INT Cleanup interval in seconds (default: 300)
+  --listenport=PORT   HTTP server listen port (default: 5000)
+  --numthreads=NUM    Number of worker processes (default: 5)
+  --sqlitepath=PATH   SQLite database file path (default: ./kafsssearchserver.sqlite)
+  --cleanlimit=INT    Result retention period in seconds (default: 86400)
+  --jobtimeout=INT    Job timeout in seconds (default: 1800)
+  --maxnjob=INT       Maximum concurrent jobs (default: 10)
+  --cleaninterval=INT Cleanup interval in seconds (default: 300)
   --help, -h          Show this help message
 
 Environment variables:
@@ -224,7 +224,7 @@ Asynchronous API Usage:
 
 Examples:
   perl kafsssearchserver.psgi
-  perl kafsssearchserver.psgi --listen-port=8080 --workers=10
+  perl kafsssearchserver.psgi --listenport=8080 --numthreads=10
   plackup -p 5000 --workers 20 kafsssearchserver.psgi
 
 Notes:
@@ -935,13 +935,13 @@ sub perform_database_search {
         die "pg_kmersearch extension is not installed in database '$request->{db}'\n" 
             unless $ext_exists;
         
-        # Check if af_kmersearch table exists
-        $sth = $dbh->prepare("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'af_kmersearch'");
+        # Check if kafsss_data table exists
+        $sth = $dbh->prepare("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'kafsss_data'");
         $sth->execute();
         my ($table_count) = $sth->fetchrow_array();
         $sth->finish();
         
-        die "Table 'af_kmersearch' does not exist in database '$request->{db}'\n" 
+        die "Table 'kafsss_data' does not exist in database '$request->{db}'\n" 
             unless $table_count > 0;
     };
     
@@ -949,7 +949,7 @@ sub perform_database_search {
         die "Database validation failed: $@";
     }
     
-    # Get k-mer size from af_kmersearch_meta table
+    # Get k-mer size from kafsss_meta table
     my $kmer_size = get_kmer_size_from_meta($dbh);
     
     # Set k-mer size for pg_kmersearch
@@ -989,7 +989,7 @@ sub perform_database_search {
         die "Failed to set rawscore cache max entries: $@";
     }
     
-    # Get ovllen from af_kmersearch_meta table for query validation
+    # Get ovllen from kafsss_meta table for query validation
     my $ovllen = get_ovllen_from_meta($dbh);
     
     # Validate query sequence
@@ -1001,9 +1001,9 @@ sub perform_database_search {
     # Build search query with subquery for efficient sorting
     my $inner_sql;
     if ($request->{mode} eq 'maximum') {
-        $inner_sql = "SELECT seq, seqid FROM af_kmersearch WHERE seq =% ?";
+        $inner_sql = "SELECT seq, seqid FROM kafsss_data WHERE seq =% ?";
     } else {
-        $inner_sql = "SELECT seq, seqid FROM af_kmersearch WHERE seq =% ?";
+        $inner_sql = "SELECT seq, seqid FROM kafsss_data WHERE seq =% ?";
     }
     
     my @params = ($request->{queryseq});
@@ -1105,8 +1105,8 @@ sub build_search_response {
 sub get_kmer_size_from_meta {
     my ($dbh) = @_;
     
-    # Query af_kmersearch_meta table to get kmer_size value
-    my $sth = $dbh->prepare("SELECT kmer_size FROM af_kmersearch_meta LIMIT 1");
+    # Query kafsss_meta table to get kmer_size value
+    my $sth = $dbh->prepare("SELECT kmer_size FROM kafsss_meta LIMIT 1");
     eval {
         $sth->execute();
         my ($kmer_size) = $sth->fetchrow_array();
@@ -1115,20 +1115,20 @@ sub get_kmer_size_from_meta {
         if (defined $kmer_size) {
             return $kmer_size;
         } else {
-            die "No k-mer index found. Please run af_kmerindex to create indexes first.\n";
+            die "No k-mer index found. Please run kafssindex to create indexes first.\n";
         }
     };
     
     if ($@) {
-        die "Failed to retrieve kmer_size from af_kmersearch_meta table: $@\n";
+        die "Failed to retrieve kmer_size from kafsss_meta table: $@\n";
     }
 }
 
 sub get_ovllen_from_meta {
     my ($dbh) = @_;
     
-    # Query af_kmersearch_meta table to get ovllen value
-    my $sth = $dbh->prepare("SELECT ovllen FROM af_kmersearch_meta LIMIT 1");
+    # Query kafsss_meta table to get ovllen value
+    my $sth = $dbh->prepare("SELECT ovllen FROM kafsss_meta LIMIT 1");
     eval {
         $sth->execute();
         my ($ovllen) = $sth->fetchrow_array();
@@ -1137,12 +1137,12 @@ sub get_ovllen_from_meta {
         if (defined $ovllen) {
             return $ovllen;
         } else {
-            die "No ovllen value found in af_kmersearch_meta table\n";
+            die "No ovllen value found in kafsss_meta table\n";
         }
     };
     
     if ($@) {
-        die "Failed to retrieve ovllen from af_kmersearch_meta table: $@\n";
+        die "Failed to retrieve ovllen from kafsss_meta table: $@\n";
     }
 }
 
@@ -1274,8 +1274,8 @@ sub get_database_metadata {
         pg_enable_utf8 => 1
     }) or die "Cannot connect to database '$database_name': $DBI::errstr";
     
-    # Get metadata from af_kmersearch_meta table
-    my $sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size FROM af_kmersearch_meta LIMIT 1");
+    # Get metadata from kafsss_meta table
+    my $sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size FROM kafsss_meta LIMIT 1");
     $sth->execute();
     my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $subset_json, $kmer_size) = $sth->fetchrow_array();
     $sth->finish();
@@ -1369,22 +1369,22 @@ sub validate_database_permissions {
     }
     
     # Check table permissions - server needs SELECT on both tables
-    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'af_kmersearch_meta', 'SELECT')");
+    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'kafsss_meta', 'SELECT')");
     $sth->execute($username);
     my $has_meta_perm = $sth->fetchrow_array();
     $sth->finish();
     
     unless ($has_meta_perm) {
-        die "Error: User '$username' does not have SELECT permission on af_kmersearch_meta table.\n";
+        die "Error: User '$username' does not have SELECT permission on kafsss_meta table.\n";
     }
     
-    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'af_kmersearch', 'SELECT')");
+    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'kafsss_data', 'SELECT')");
     $sth->execute($username);
     my $has_table_perm = $sth->fetchrow_array();
     $sth->finish();
     
     unless ($has_table_perm) {
-        die "Error: User '$username' does not have SELECT permission on af_kmersearch table.\n";
+        die "Error: User '$username' does not have SELECT permission on kafsss_data table.\n";
     }
 }
 
@@ -1392,7 +1392,7 @@ sub validate_database_schema {
     my ($dbh) = @_;
     
     # Check if required tables exist
-    my @required_tables = ('af_kmersearch_meta', 'af_kmersearch');
+    my @required_tables = ('kafsss_meta', 'kafsss_data');
     
     for my $table (@required_tables) {
         my $sth = $dbh->prepare("SELECT 1 FROM information_schema.tables WHERE table_name = ?");

@@ -188,7 +188,7 @@ Required arguments:
   database_name     PostgreSQL database name
 
 Required options:
-  --subset=NAME  Subset name to add/remove (can be specified multiple times or comma-separated)
+  --subset=NAME     Subset name to add/remove (can be specified multiple times or comma-separated)
                     Use 'all' to target all subsets (only in del mode)
 
 Other options:
@@ -400,7 +400,7 @@ sub check_database_exists {
     
     unless ($result) {
         die "Error: Database '$dbname' does not exist.\n" .
-            "Please create the database first using af_kmerstore.\n";
+            "Please create the database first using kafssstore.\n";
     }
     
     print "Database '$dbname' exists.\n";
@@ -458,8 +458,8 @@ sub validate_database_schema {
         
         unless ($table_exists) {
             die "Error: Required table '$table' does not exist in database.\n" .
-                "This database may not have been created with af_kmerstore.\n" .
-                "Please create the database properly using af_kmerstore first.\n";
+                "This database may not have been created with kafssstore.\n" .
+                "Please create the database properly using kafssstore first.\n";
         }
     }
     
@@ -527,7 +527,7 @@ SQL
     die "Table 'kafsss_meta' does not exist in database '$database_name'\n" 
         unless $meta_table_count > 0;
     
-    # Check if new columns exist (added by updated af_kmerstore)
+    # Check if new columns exist (added by updated kafssstore)
     $sth = $dbh->prepare(<<SQL);
 SELECT column_name
 FROM information_schema.columns 
@@ -548,7 +548,7 @@ SQL
         print "Database appears to be updated for new pg_kmersearch specification.\n";
     } else {
         print "Warning: New meta columns not found. Database may be from older version.\n";
-        print "Consider updating with latest af_kmerstore\n";
+        print "Consider updating with latest kafssstore\n";
     }
     
     print "Meta table compatibility check completed.\n";

@@ -135,7 +135,7 @@ kafsssearchserver.fcgi version $VERSION
 
 Usage: perl kafsssearchserver.fcgi [options]
 
-FastCGI server for asynchronous k-mer search using af_kmersearch database.
+FastCGI server for asynchronous k-mer search using kafsss database.
 Designed to work with NGINX FastCGI.
 
 Options:
@@ -143,11 +143,11 @@ Options:
   --port=PORT         PostgreSQL server port (default: \$PGPORT or 5432)
   --username=USER     PostgreSQL username (default: \$PGUSER or current user)
   --numthreads=NUM    Number of FastCGI processes (default: 5)
-  --sqlite-path=PATH  SQLite database file path (default: ./kafsssearchserver.sqlite)
-  --clean-limit=INT   Result retention period in seconds (default: 86400)
-  --job-timeout=INT   Job timeout in seconds (default: 1800)
-  --max-jobs=INT      Maximum concurrent jobs (default: 10)
-  --cleanup-interval=INT Cleanup interval in seconds (default: 300)
+  --sqlitepath=PATH   SQLite database file path (default: ./kafsssearchserver.sqlite)
+  --cleanlimit=INT    Result retention period in seconds (default: 86400)
+  --jobtimeout=INT    Job timeout in seconds (default: 1800)
+  --maxnjob=INT       Maximum concurrent jobs (default: 10)
+  --cleaninterval=INT Cleanup interval in seconds (default: 300)
   --help, -h          Show this help message
 
 Environment variables:
@@ -159,13 +159,13 @@ Environment variables:
 NGINX Configuration Example:
   location /api/ {
       include fastcgi_params;
-      fastcgi_pass unix:/var/run/af_kmersearch.sock;
+      fastcgi_pass unix:/var/run/kafsss.sock;
       fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
   }
 
 Spawn-FCGI Usage:
-  spawn-fcgi -s /var/run/af_kmersearch.sock -U nginx -G nginx \\
-            -u www-data -g www-data -P /var/run/af_kmersearch.pid \\
+  spawn-fcgi -s /var/run/kafsss.sock -U nginx -G nginx \\
+            -u www-data -g www-data -P /var/run/kafsss.pid \\
             -- perl kafsssearchserver.fcgi --numthreads=10
 
 Asynchronous API Usage:
@@ -943,13 +943,13 @@ sub perform_database_search {
         die "pg_kmersearch extension is not installed in database '$request->{db}'\n" 
             unless $ext_exists;
         
-        # Check if af_kmersearch table exists
-        $sth = $dbh->prepare("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'af_kmersearch'");
+        # Check if kafsss_data table exists
+        $sth = $dbh->prepare("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'kafsss_data'");
         $sth->execute();
         my ($table_count) = $sth->fetchrow_array();
         $sth->finish();
         
-        die "Table 'af_kmersearch' does not exist in database '$request->{db}'\n" 
+        die "Table 'kafsss_data' does not exist in database '$request->{db}'\n" 
             unless $table_count > 0;
     };
     
@@ -957,7 +957,7 @@ sub perform_database_search {
         die "Database validation failed: $@";
     }
     
-    # Get k-mer size from af_kmersearch_meta table
+    # Get k-mer size from kafsss_meta table
     my $kmer_size = get_kmer_size_from_meta($dbh);
     
     # Set k-mer size for pg_kmersearch
@@ -997,7 +997,7 @@ sub perform_database_search {
         die "Failed to set rawscore cache max entries: $@";
     }
     
-    # Get ovllen from af_kmersearch_meta table for query validation
+    # Get ovllen from kafsss_meta table for query validation
     my $ovllen = get_ovllen_from_meta($dbh);
     
     # Validate query sequence
@@ -1009,9 +1009,9 @@ sub perform_database_search {
     # Build search query with subquery for efficient sorting
     my $inner_sql;
     if ($request->{mode} eq 'maximum') {
-        $inner_sql = "SELECT seq, seqid FROM af_kmersearch WHERE seq =% ?";
+        $inner_sql = "SELECT seq, seqid FROM kafsss_data WHERE seq =% ?";
     } else {
-        $inner_sql = "SELECT seq, seqid FROM af_kmersearch WHERE seq =% ?";
+        $inner_sql = "SELECT seq, seqid FROM kafsss_data WHERE seq =% ?";
     }
     
     my @params = ($request->{queryseq});
@@ -1113,8 +1113,8 @@ sub build_search_response {
 sub get_kmer_size_from_meta {
     my ($dbh) = @_;
     
-    # Query af_kmersearch_meta table to get kmer_size value
-    my $sth = $dbh->prepare("SELECT kmer_size FROM af_kmersearch_meta LIMIT 1");
+    # Query kafsss_meta table to get kmer_size value
+    my $sth = $dbh->prepare("SELECT kmer_size FROM kafsss_meta LIMIT 1");
     eval {
         $sth->execute();
         my ($kmer_size) = $sth->fetchrow_array();
@@ -1123,20 +1123,20 @@ sub get_kmer_size_from_meta {
         if (defined $kmer_size) {
             return $kmer_size;
         } else {
-            die "No k-mer index found. Please run af_kmerindex to create indexes first.\n";
+            die "No k-mer index found. Please run kafssindex to create indexes first.\n";
         }
     };
     
     if ($@) {
-        die "Failed to retrieve kmer_size from af_kmersearch_meta table: $@\n";
+        die "Failed to retrieve kmer_size from kafsss_meta table: $@\n";
     }
 }
 
 sub get_ovllen_from_meta {
     my ($dbh) = @_;
     
-    # Query af_kmersearch_meta table to get ovllen value
-    my $sth = $dbh->prepare("SELECT ovllen FROM af_kmersearch_meta LIMIT 1");
+    # Query kafsss_meta table to get ovllen value
+    my $sth = $dbh->prepare("SELECT ovllen FROM kafsss_meta LIMIT 1");
     eval {
         $sth->execute();
         my ($ovllen) = $sth->fetchrow_array();
@@ -1145,12 +1145,12 @@ sub get_ovllen_from_meta {
         if (defined $ovllen) {
             return $ovllen;
         } else {
-            die "No ovllen value found in af_kmersearch_meta table\n";
+            die "No ovllen value found in kafsss_meta table\n";
         }
     };
     
     if ($@) {
-        die "Failed to retrieve ovllen from af_kmersearch_meta table: $@\n";
+        die "Failed to retrieve ovllen from kafsss_meta table: $@\n";
     }
 }
 
@@ -1282,8 +1282,8 @@ sub get_database_metadata {
         pg_enable_utf8 => 1
     }) or die "Cannot connect to database '$database_name': $DBI::errstr";
     
-    # Get metadata from af_kmersearch_meta table
-    my $sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size FROM af_kmersearch_meta LIMIT 1");
+    # Get metadata from kafsss_meta table
+    my $sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size FROM kafsss_meta LIMIT 1");
     $sth->execute();
     my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $subset_json, $kmer_size) = $sth->fetchrow_array();
     $sth->finish();
@@ -1377,22 +1377,22 @@ sub validate_database_permissions {
     }
     
     # Check table permissions - server needs SELECT on both tables
-    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'af_kmersearch_meta', 'SELECT')");
+    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'kafsss_meta', 'SELECT')");
     $sth->execute($username);
     my $has_meta_perm = $sth->fetchrow_array();
     $sth->finish();
     
     unless ($has_meta_perm) {
-        die "Error: User '$username' does not have SELECT permission on af_kmersearch_meta table.\n";
+        die "Error: User '$username' does not have SELECT permission on kafsss_meta table.\n";
     }
     
-    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'af_kmersearch', 'SELECT')");
+    $sth = $dbh->prepare("SELECT has_table_privilege(?, 'kafsss_data', 'SELECT')");
     $sth->execute($username);
     my $has_table_perm = $sth->fetchrow_array();
     $sth->finish();
     
     unless ($has_table_perm) {
-        die "Error: User '$username' does not have SELECT permission on af_kmersearch table.\n";
+        die "Error: User '$username' does not have SELECT permission on kafsss_data table.\n";
     }
 }
 
@@ -1400,7 +1400,7 @@ sub validate_database_schema {
     my ($dbh) = @_;
     
     # Check if required tables exist
-    my @required_tables = ('af_kmersearch_meta', 'af_kmersearch');
+    my @required_tables = ('kafsss_meta', 'kafsss_data');
     
     for my $table (@required_tables) {
         my $sth = $dbh->prepare("SELECT 1 FROM information_schema.tables WHERE table_name = ?");

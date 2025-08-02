@@ -44,10 +44,10 @@ GetOptions(
     'username=s' => \$username,
     'tablespace=s' => \$tablespace,
     'mode=s' => \$mode,
-    'kmer_size=i' => \$kmer_size,
-    'max_appearance_rate=f' => \$max_appearance_rate,
-    'max_appearance_nrow=i' => \$max_appearance_nrow,
-    'occur_bitlen=i' => \$occur_bitlen,
+    'kmersize=i' => \$kmer_size,
+    'maxpappear=f' => \$max_appearance_rate,
+    'maxnappear=i' => \$max_appearance_nrow,
+    'occurbitlen=i' => \$occur_bitlen,
     'numthreads=i' => \$numthreads,
     'workingmemory=s' => \$workingmemory,
     'maintenanceworkingmemory=s' => \$maintenanceworkingmemory,
@@ -75,10 +75,10 @@ die "Mode must be specified with --mode option (create or drop)\n" unless $mode;
 die "Invalid mode '$mode'. Must be 'create' or 'drop'\n" unless $mode eq 'create' || $mode eq 'drop';
 
 # Validate parameters
-die "kmer_size must be between 4 and 64\n" unless $kmer_size >= 4 && $kmer_size <= 64;
-die "max_appearance_rate must be between 0.0 and 1.0\n" unless $max_appearance_rate >= 0.0 && $max_appearance_rate <= 1.0;
-die "max_appearance_nrow must be non-negative\n" unless $max_appearance_nrow >= 0;
-die "occur_bitlen must be between 0 and 16\n" unless $occur_bitlen >= 0 && $occur_bitlen <= 16;
+die "kmersize must be between 4 and 64\n" unless $kmer_size >= 4 && $kmer_size <= 64;
+die "maxpappear must be between 0.0 and 1.0\n" unless $max_appearance_rate >= 0.0 && $max_appearance_rate <= 1.0;
+die "maxnappear must be non-negative\n" unless $max_appearance_nrow >= 0;
+die "occurbitlen must be between 0 and 16\n" unless $occur_bitlen >= 0 && $occur_bitlen <= 16;
 die "numthreads must be non-negative\n" unless $numthreads >= 0;
 
 print "kafssindex version $VERSION\n";
@@ -114,7 +114,7 @@ validate_user_and_permissions($server_dbh, $username);
 unless (check_database_exists($server_dbh, $database_name)) {
     $server_dbh->disconnect();
     die "Error: Database '$database_name' does not exist.\n" .
-        "Please create it first using af_kmerstore.\n";
+        "Please create it first using kafssstore.\n";
 }
 
 $server_dbh->disconnect();
@@ -194,14 +194,14 @@ Other options:
   --port=PORT       PostgreSQL server port (default: \$PGPORT or 5432)
   --username=USER   PostgreSQL username (default: \$PGUSER or current user)
   --tablespace=NAME Tablespace name for CREATE INDEX (default: default tablespace)
-  --kmer_size=INT   K-mer length for index creation (default: 8, range: 4-64)
-  --max_appearance_rate=REAL  Max k-mer appearance rate (default: 0.5, range: 0.0-1.0)
-  --max_appearance_nrow=INT   Max rows containing k-mer (default: 0=unlimited)
-  --occur_bitlen=INT          Bits for occurrence count (default: 8, range: 0-16)
-  --numthreads=INT            Number of parallel workers (default: 0=auto)
-  --workingmemory=SIZE        Work memory for each operation (default: 8GB)
+  --kmersize=INT    K-mer length for index creation (default: 8, range: 4-64)
+  --maxpappear=REAL Max k-mer appearance rate (default: 0.5, range: 0.0-1.0)
+  --maxnappear=INT  Max rows containing k-mer (default: 0=unlimited)
+  --occurbitlen=INT Bits for occurrence count (default: 8, range: 0-16)
+  --numthreads=INT  Number of parallel workers (default: 0=auto)
+  --workingmemory=SIZE  Work memory for each operation (default: 8GB)
   --maintenanceworkingmemory=SIZE  Maintenance work memory for index creation (default: 8GB)
-  --temporarybuffer=SIZE      Temporary buffer size (default: 512MB)
+  --temporarybuffer=SIZE  Temporary buffer size (default: 512MB)
   --verbose, -v     Show detailed processing messages (default: false)
   --help, -h        Show this help message
 
@@ -215,12 +215,12 @@ Examples:
   kafssindex --mode=create mydb
   kafssindex --mode=drop mydb
   kafssindex --mode=create --tablespace=fast_ssd mydb
-  kafssindex --mode=create --kmer_size=16 mydb
+  kafssindex --mode=create --kmersize=16 mydb
   kafssindex --mode=create --maintenanceworkingmemory=64GB mydb
-  kafssindex --mode=create --kmer_size=32 --maintenanceworkingmemory=128GB --temporarybuffer=1GB mydb
+  kafssindex --mode=create --kmersize=32 --maintenanceworkingmemory=128GB --temporarybuffer=1GB mydb
   kafssindex --mode=create --workingmemory=32GB --maintenanceworkingmemory=128GB --tablespace=fast_ssd mydb
-  kafssindex --mode=create --max_appearance_rate=0.3 --max_appearance_nrow=500 mydb
-  kafssindex --mode=create --occur_bitlen=12 --numthreads=8 mydb
+  kafssindex --mode=create --maxpappear=0.3 --maxnappear=500 mydb
+  kafssindex --mode=create --occurbitlen=12 --numthreads=8 mydb
 
 EOF
 }
@@ -754,8 +754,8 @@ sub validate_database_schema {
         
         unless ($table_exists) {
             die "Error: Required table '$table' does not exist in database.\n" .
-                "This database may not have been created with af_kmerstore.\n" .
-                "Please create the database properly using af_kmerstore first.\n";
+                "This database may not have been created with kafssstore.\n" .
+                "Please create the database properly using kafssstore first.\n";
         }
     }
     

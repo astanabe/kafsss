@@ -165,7 +165,7 @@ if ($db_exists && !$overwrite) {
         print "Using existing database '$output_db'\n";
     } elsif ($validation_result == -1) {
         die "Existing database '$output_db' has indexes. Cannot add data while indexes exist.\n" .
-            "To add data, first drop indexes using: af_kmerindex --mode=drop $output_db\n";
+            "To add data, first drop indexes using: kafssindex --mode=drop $output_db\n";
     } else {
         die "Existing database '$output_db' is not compatible. Parameter mismatch detected.\n" .
             "Use --overwrite to recreate database, or adjust parameters to match existing database.\n" .
@@ -300,7 +300,7 @@ Options:
   --numthreads=INT  Number of parallel threads (default: 1)
   --compress=TYPE   Column compression type: lz4, pglz, or disable (default: lz4)
   --batchsize=INT   Batch size for fragment processing (default: 100000)
-  --subset=NAME  Subset name (can be specified multiple times or comma-separated)
+  --subset=NAME     Subset name (can be specified multiple times or comma-separated)
   --tablespace=NAME Tablespace name for CREATE DATABASE (default: default tablespace)
   --workingmemory=SIZE        Work memory for each operation (default: 8GB)
   --maintenanceworkingmemory=SIZE  Maintenance work memory for operations (default: 8GB)

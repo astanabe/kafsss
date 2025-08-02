@@ -60,13 +60,13 @@ GetOptions(
     'host=s' => \$host,
     'port=i' => \$port,
     'username=s' => \$username,
-    'listen-port=i' => \$listen_port,
+    'listenport=i' => \$listen_port,
     'numthreads=i' => \$numthreads,
-    'sqlite-path=s' => \$sqlite_path,
-    'clean-limit=i' => \$clean_limit,
-    'job-timeout=i' => \$job_timeout,
-    'max-jobs=i' => \$max_jobs,
-    'cleanup-interval=i' => \$cleanup_interval,
+    'sqlitepath=s' => \$sqlite_path,
+    'cleanlimit=i' => \$clean_limit,
+    'jobtimeout=i' => \$job_timeout,
+    'maxnjob=i' => \$max_jobs,
+    'cleaninterval=i' => \$cleanup_interval,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
 
@@ -226,19 +226,19 @@ kafsssearchserver version $VERSION
 
 Usage: perl kafsssearchserver_standalone.pl [options]
 
-REST API server for k-mer search using af_kmersearch database.
+REST API server for k-mer search using kafsss database.
 
 Options:
   --host=HOST         PostgreSQL server host (default: \$PGHOST or localhost)
   --port=PORT         PostgreSQL server port (default: \$PGPORT or 5432)
   --username=USER     PostgreSQL username (default: \$PGUSER or current user)
-  --listen-port=PORT  HTTP server listen port (default: 8080)
+  --listenport=PORT   HTTP server listen port (default: 8080)
   --numthreads=INT    Number of parallel request processing threads (default: 5)
-  --sqlite-path=PATH  SQLite database file path (default: ./kafsssearchserver.sqlite)
-  --clean-limit=INT   Result retention period in seconds (default: 86400)
-  --job-timeout=INT   Job timeout in seconds (default: 1800)
-  --max-jobs=INT      Maximum concurrent jobs (default: 10)
-  --cleanup-interval=INT Cleanup interval in seconds (default: 300)
+  --sqlitepath=PATH   SQLite database file path (default: ./kafsssearchserver.sqlite)
+  --cleanlimit=INT    Result retention period in seconds (default: 86400)
+  --jobtimeout=INT    Job timeout in seconds (default: 1800)
+  --maxnjob=INT       Maximum concurrent jobs (default: 10)
+  --cleaninterval=INT Cleanup interval in seconds (default: 300)
   --help, -h          Show this help message
 
 Environment variables:
@@ -302,7 +302,7 @@ API Usage:
 
 Examples:
   perl kafsssearchserver_standalone.pl
-  perl kafsssearchserver_standalone.pl --listen-port=9090
+  perl kafsssearchserver_standalone.pl --listenport=9090
   perl kafsssearchserver_standalone.pl --host=remote-db --port=5433
   perl kafsssearchserver_standalone.pl --numthreads=10
 
@@ -1069,13 +1069,13 @@ sub perform_database_search {
         die "pg_kmersearch extension is not installed in database '$request->{db}'\n" 
             unless $ext_exists;
         
-        # Check if af_kmersearch table exists
-        $sth = $dbh->prepare("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'af_kmersearch'");
+        # Check if kafsss_data table exists
+        $sth = $dbh->prepare("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'kafsss_data'");
         $sth->execute();
         my ($table_count) = $sth->fetchrow_array();
         $sth->finish();
         
-        die "Table 'af_kmersearch' does not exist in database '$request->{db}'\n" 
+        die "Table 'kafsss_data' does not exist in database '$request->{db}'\n" 
             unless $table_count > 0;
     };
     
@@ -1083,7 +1083,7 @@ sub perform_database_search {
         die "Database validation failed: $@";
     }
     
-    # Get k-mer size from af_kmersearch_meta table
+    # Get k-mer size from kafsss_meta table
     my $kmer_size = $self->get_kmer_size_from_meta($dbh);
     
     # Set k-mer size for pg_kmersearch
@@ -1123,7 +1123,7 @@ sub perform_database_search {
         die "Failed to set rawscore cache max entries: $@";
     }
     
-    # Get ovllen from af_kmersearch_meta table for query validation
+    # Get ovllen from kafsss_meta table for query validation
     my $ovllen = $self->get_ovllen_from_meta($dbh);
     
     # Validate query sequence
@@ -1135,9 +1135,9 @@ sub perform_database_search {
     # Build search query with subquery for efficient sorting
     my $inner_sql;
     if ($request->{mode} eq 'maximum') {
-        $inner_sql = "SELECT seq, seqid FROM af_kmersearch WHERE seq =% ?";
+        $inner_sql = "SELECT seq, seqid FROM kafsss_data WHERE seq =% ?";
     } else {
-        $inner_sql = "SELECT seq, seqid FROM af_kmersearch WHERE seq =% ?";
+        $inner_sql = "SELECT seq, seqid FROM kafsss_data WHERE seq =% ?";
     }
     
     my @params = ($request->{queryseq});
@@ -1240,8 +1240,8 @@ sub build_search_response {
 sub get_kmer_size_from_meta {
     my ($self, $dbh) = @_;
     
-    # Query af_kmersearch_meta table to get kmer_size value
-    my $sth = $dbh->prepare("SELECT kmer_size FROM af_kmersearch_meta LIMIT 1");
+    # Query kafsss_meta table to get kmer_size value
+    my $sth = $dbh->prepare("SELECT kmer_size FROM kafsss_meta LIMIT 1");
     eval {
         $sth->execute();
         my ($kmer_size) = $sth->fetchrow_array();
@@ -1250,20 +1250,20 @@ sub get_kmer_size_from_meta {
         if (defined $kmer_size) {
             return $kmer_size;
         } else {
-            die "No k-mer index found. Please run af_kmerindex to create indexes first.\n";
+            die "No k-mer index found. Please run kafssindex to create indexes first.\n";
         }
     };
     
     if ($@) {
-        die "Failed to retrieve kmer_size from af_kmersearch_meta table: $@\n";
+        die "Failed to retrieve kmer_size from kafsss_meta table: $@\n";
     }
 }
 
 sub get_ovllen_from_meta {
     my ($self, $dbh) = @_;
     
-    # Query af_kmersearch_meta table to get ovllen value
-    my $sth = $dbh->prepare("SELECT ovllen FROM af_kmersearch_meta LIMIT 1");
+    # Query kafsss_meta table to get ovllen value
+    my $sth = $dbh->prepare("SELECT ovllen FROM kafsss_meta LIMIT 1");
     eval {
         $sth->execute();
         my ($ovllen) = $sth->fetchrow_array();
@@ -1272,12 +1272,12 @@ sub get_ovllen_from_meta {
         if (defined $ovllen) {
             return $ovllen;
         } else {
-            die "No ovllen value found in af_kmersearch_meta table\n";
+            die "No ovllen value found in kafsss_meta table\n";
         }
     };
     
     if ($@) {
-        die "Failed to retrieve ovllen from af_kmersearch_meta table: $@\n";
+        die "Failed to retrieve ovllen from kafsss_meta table: $@\n";
     }
 }
 

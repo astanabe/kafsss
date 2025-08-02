@@ -3,13 +3,13 @@
 use strict;
 use warnings;
 
-# AF KmerSearch Tools - Dependency Checker
-# このスクリプトは、AF KmerSearchツールキットの実行に必要なPerlモジュールが
+# kafsss Tools - Dependency Checker
+# このスクリプトは、kafsssツールキットの実行に必要なPerlモジュールが
 # すべてインストールされているかを確認します。
 
 my $VERSION = "1.0.0";
 
-print "AF KmerSearch Tools - Dependency Checker v$VERSION\n";
+print "kafsss Tools - Dependency Checker v$VERSION\n";
 print "=" x 60 . "\n\n";
 
 # 必須モジュールの定義
@@ -27,19 +27,19 @@ my @core_modules = (
 );
 
 my @network_modules = (
-    ['LWP::UserAgent', 'HTTP client (for af_kmersearchclient)'],
-    ['HTTP::Request::Common', 'HTTP request generation (for af_kmersearchclient)'],
-    ['URI', 'URI parsing and encoding (for af_kmersearchclient)'],
+    ['LWP::UserAgent', 'HTTP client (for kafsssearchclient)'],
+    ['HTTP::Request::Common', 'HTTP request generation (for kafsssearchclient)'],
+    ['URI', 'URI parsing and encoding (for kafsssearchclient)'],
 );
 
 my @server_modules = (
-    ['HTTP::Server::Simple::CGI', 'Standalone web server (for af_kmersearchserver.pl)'],
-    ['CGI::Fast', 'FastCGI implementation (for af_kmersearchserver.fcgi)'],
-    ['FCGI::ProcManager', 'FastCGI process manager (for af_kmersearchserver.fcgi)'],
-    ['Plack::Request', 'PSGI/Plack framework (for af_kmersearchserver.psgi)'],
-    ['Plack::Response', 'PSGI/Plack framework (for af_kmersearchserver.psgi)'],
-    ['Plack::Builder', 'PSGI/Plack framework (for af_kmersearchserver.psgi)'],
-    ['Plack::Handler::Starman', 'Starman HTTP server (for af_kmersearchserver.psgi)'],
+    ['HTTP::Server::Simple::CGI', 'Standalone web server (for kafsssearchserver.pl)'],
+    ['CGI::Fast', 'FastCGI implementation (for kafsssearchserver.fcgi)'],
+    ['FCGI::ProcManager', 'FastCGI process manager (for kafsssearchserver.fcgi)'],
+    ['Plack::Request', 'PSGI/Plack framework (for kafsssearchserver.psgi)'],
+    ['Plack::Response', 'PSGI/Plack framework (for kafsssearchserver.psgi)'],
+    ['Plack::Builder', 'PSGI/Plack framework (for kafsssearchserver.psgi)'],
+    ['Plack::Handler::Starman', 'Starman HTTP server (for kafsssearchserver.psgi)'],
 );
 
 my @optional_modules = (
@@ -83,12 +83,12 @@ for my $module_info (@core_modules) {
 print "\n";
 
 # ネットワークモジュールの確認
-print "Network client modules (for af_kmersearchclient):\n";
+print "Network client modules (for kafsssearchclient):\n";
 print "-" x 50 . "\n";
 for my $module_info (@network_modules) {
     my ($module, $description) = @$module_info;
     unless (check_module($module, $description)) {
-        print "  Note: This module is only required for af_kmersearchclient\n";
+        print "  Note: This module is only required for kafsssearchclient\n";
     }
 }
 
@@ -144,7 +144,7 @@ print "=" x 60 . "\n";
 
 if ($all_ok) {
     print "✓ All core dependencies are satisfied!\n";
-    print "You can run all AF KmerSearch tools.\n";
+    print "You can run all kafsss tools.\n";
     exit 0;
 } else {
     print "✗ Some core dependencies are missing.\n";

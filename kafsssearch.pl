@@ -123,7 +123,7 @@ validate_user_and_permissions($server_dbh, $username);
 unless (check_database_exists($server_dbh, $database)) {
     $server_dbh->disconnect();
     die "Error: Database '$database' does not exist.\n" .
-        "Please create it first using af_kmerstore.\n";
+        "Please create it first using kafssstore.\n";
 }
 
 $server_dbh->disconnect();
@@ -305,7 +305,7 @@ Other options:
   --host=HOST       PostgreSQL server host (default: \$PGHOST or localhost)
   --port=PORT       PostgreSQL server port (default: \$PGPORT or 5432)
   --username=USER   PostgreSQL username (default: \$PGUSER or current user)
-  --subset=NAME  Limit search to specific subset (optional)
+  --subset=NAME     Limit search to specific subset (optional)
   --maxnseq=INT     Maximum number of results per query (default: 1000)
   --minscore=INT    Minimum score threshold (optional, uses kmersearch.min_score GUC variable)
   --minpsharedkey=REAL  Minimum percentage of shared keys (0.0-1.0, default: 0.9)
@@ -995,7 +995,7 @@ SQL
     $sth->finish();
     
     if (!defined $ovllen || !defined $kmer_size) {
-        die "No metadata found in kafsss_meta table. Please run af_kmerindex to create indexes first.\n";
+        die "No metadata found in kafsss_meta table. Please run kafssindex to create indexes first.\n";
     }
     
     return {
@@ -1046,7 +1046,7 @@ sub get_kmer_size_from_meta {
         if (defined $kmer_size) {
             return $kmer_size;
         } else {
-            die "No k-mer index found. Please run af_kmerindex to create indexes first.\n";
+            die "No k-mer index found. Please run kafssindex to create indexes first.\n";
         }
     };
     
@@ -1239,8 +1239,8 @@ sub validate_database_schema {
         
         unless ($table_exists) {
             die "Error: Required table '$table' does not exist in database.\n" .
-                "This database may not have been created with af_kmerstore.\n" .
-                "Please create the database properly using af_kmerstore first.\n";
+                "This database may not have been created with kafssstore.\n" .
+                "Please create the database properly using kafssstore first.\n";
         }
     }
     
@@ -1252,7 +1252,7 @@ sub validate_database_schema {
     
     unless ($has_kmer_index) {
         die "Error: Database does not have k-mer indexes.\n" .
-            "Please create indexes first using: af_kmerindex --mode=create $database\n";
+            "Please create indexes first using: kafssindex --mode=create $database\n";
     }
     
     print "Database schema validation completed.\n";

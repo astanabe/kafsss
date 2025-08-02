@@ -255,7 +255,7 @@ sub check_database_exists {
     
     unless ($result) {
         die "Error: Database '$dbname' does not exist.\n" .
-            "Please create the database first using af_kmerstore.\n";
+            "Please create the database first using kafssstore.\n";
     }
     
     print STDERR "Database '$dbname' exists.\n";
@@ -326,8 +326,8 @@ sub validate_database_schema {
         
         unless ($table_exists) {
             die "Error: Required table '$table' does not exist in database.\n" .
-                "This database may not have been created with af_kmerstore.\n" .
-                "Please create the database properly using af_kmerstore first.\n";
+                "This database may not have been created with kafssstore.\n" .
+                "Please create the database properly using kafssstore first.\n";
         }
     }
     
