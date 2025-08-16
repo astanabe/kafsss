@@ -298,6 +298,9 @@ perl -MStarman -e 'print "Starman available\n"'
 | `kafssindex` | 配列データのGINインデックスを作成/削除 |
 | `kafsssearch` | k-mer類似性を使用した配列検索 |
 | `kafssdbinfo` | データベースメタデータ情報を表示 |
+| `kafssdedup` | データベース内の配列の重複除去 |
+| `kafsspart` | パフォーマンス向上のためのkafsss_dataテーブルのパーティション化 |
+| `kafssfreq` | K-mer頻度分析 |
 | `kafsssearchclient` | 負荷分散機能付きリモートk-mer検索クライアント |
 | `kafsssearchserver.pl` | 非同期ジョブ処理機能付きk-mer検索用REST APIサーバ（スタンドアローン） |
 | `kafsssearchserver.fcgi` | 本番Webサーバ用FastCGI版 |
@@ -892,22 +895,37 @@ plackup -p 8080 --workers 20 kafsssearchserver.psgi
    kafssstore --subset=bacteria sequences.fasta mydb
    ```
 
-2. **サブセット情報追加:**
+2. **配列の重複除去（パーティションテーブルの互換性確認）:**
    ```bash
-   kafsssubset --subset=pathogenic bacteria_ids.txt mydb
+   kafssdedup mydb
    ```
 
-3. **インデックス作成:**
+3. **パフォーマンス向上のためのテーブルパーティション化:**
+   ```bash
+   kafsspart --npart=16 mydb
+   ```
+
+4. **k-mer頻度分析の実行:**
+   ```bash
+   kafssfreq mydb
+   ```
+
+5. **インデックス作成:**
    ```bash
    kafssindex --mode=create mydb
    ```
 
-4. **データベース情報確認:**
+6. **サブセット情報追加:**
+   ```bash
+   kafsssubset --subset=pathogenic bacteria_ids.txt mydb
+   ```
+
+7. **データベース情報確認:**
    ```bash
    kafssdbinfo mydb
    ```
 
-5. **配列検索:**
+8. **配列検索:**
    ```bash
    kafsssearch --db=mydb --subset=pathogenic query.fasta results.tsv
    ```

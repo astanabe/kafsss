@@ -208,22 +208,11 @@ if (defined $minscore) {
 # Set minimum shared key rate
 print "Setting minimum shared key rate to $minpsharedkey...\n";
 eval {
-    $dbh->do("SET kmersearch.min_shared_ngram_key_rate = $minpsharedkey");
+    $dbh->do("SET kmersearch.min_shared_kmer_rate = $minpsharedkey");
     print "Minimum shared key rate set to $minpsharedkey successfully.\n";
 };
 if ($@) {
     die "Failed to set minimum shared key rate: $@\n";
-}
-
-# Set rawscore cache max entries (maxnseq * 2)
-my $rawscore_cache_max_entries = $maxnseq * 2;
-print "Setting rawscore cache max entries to $rawscore_cache_max_entries...\n";
-eval {
-    $dbh->do("SET kmersearch.rawscore_cache_max_entries = $rawscore_cache_max_entries");
-    print "Rawscore cache max entries set to $rawscore_cache_max_entries successfully.\n";
-};
-if ($@) {
-    die "Failed to set rawscore cache max entries: $@\n";
 }
 
 # Parent process disconnects from database after metadata retrieval (child processes will reconnect)
@@ -324,7 +313,7 @@ Output format:
   Tab-separated values with columns:
   1. Query sequence number (1-based integer)
   2. Query FASTA label
-  3. Corrected score from kmersearch_correctedscore function
+  3. Match score from kmersearch_matchscore function
   4. Comma-separated seqid list from seqid column
   5. Sequence data (only in maximum mode)
 
@@ -761,19 +750,10 @@ sub process_single_sequence {
     
     # Set minimum shared key rate
     eval {
-        $child_dbh->do("SET kmersearch.min_shared_ngram_key_rate = $minpsharedkey");
+        $child_dbh->do("SET kmersearch.min_shared_kmer_rate = $minpsharedkey");
     };
     if ($@) {
         die "Failed to set minimum shared key rate in child process: $@\n";
-    }
-    
-    # Set rawscore cache max entries (maxnseq * 2)
-    my $child_rawscore_cache_max_entries = $maxnseq * 2;
-    eval {
-        $child_dbh->do("SET kmersearch.rawscore_cache_max_entries = $child_rawscore_cache_max_entries");
-    };
-    if ($@) {
-        die "Failed to set rawscore cache max entries in child process: $@\n";
     }
     
     # Search sequence (using metadata from parent, no need to retrieve again)
@@ -831,16 +811,16 @@ SQL
         push @params, $subset;
     }
     
-    # Add ORDER BY and LIMIT to inner query (use rawscore for performance)
-    $inner_sql .= " ORDER BY kmersearch_rawscore(seq, ?) DESC LIMIT ?";
+    # Add ORDER BY and LIMIT to inner query (use matchscore for performance)
+    $inner_sql .= " ORDER BY kmersearch_matchscore(seq, ?) DESC LIMIT ?";
     push @params, $sequence, $maxnseq;
     
-    # Build outer query with corrected score sorting
+    # Build outer query with match score sorting
     my $sql;
     if ($search_mode eq 'maximum') {
         $sql = <<SQL;
 SELECT 
-    kmersearch_correctedscore(seq, ?) AS score,
+    kmersearch_matchscore(seq, ?) AS score,
     seqid,
     seq
 FROM ($inner_sql) selected_rows
@@ -849,7 +829,7 @@ SQL
     } else {
         $sql = <<SQL;
 SELECT 
-    kmersearch_correctedscore(seq, ?) AS score,
+    kmersearch_matchscore(seq, ?) AS score,
     seqid
 FROM ($inner_sql) selected_rows
 ORDER BY score DESC

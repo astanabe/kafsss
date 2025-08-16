@@ -299,6 +299,7 @@ perl -MStarman -e 'print "Starman available\n"'
 | `kafsssearch` | Search sequences using k-mer similarity |
 | `kafssdbinfo` | Display database metadata information |
 | `kafssdedup` | Deduplicate sequences in database |
+| `kafsspart` | Partition kafsss_data table for improved performance |
 | `kafssfreq` | K-mer frequency analysis |
 | `kafsssearchclient` | Remote k-mer search client with load balancing |
 | `kafsssearchserver.pl` | REST API server for k-mer search (standalone) with asynchronous job processing |
@@ -894,22 +895,37 @@ plackup -p 8080 --workers 20 kafsssearchserver.psgi
    kafssstore --subset=bacteria sequences.fasta mydb
    ```
 
-2. **Add subset information:**
+2. **Deduplicate sequences (verify partition table compatibility):**
    ```bash
-   kafsssubset --subset=pathogenic bacteria_ids.txt mydb
+   kafssdedup mydb
    ```
 
-3. **Create indexes:**
+3. **Partition the table for improved performance:**
+   ```bash
+   kafsspart --npart=16 mydb
+   ```
+
+4. **Perform k-mer frequency analysis:**
+   ```bash
+   kafssfreq mydb
+   ```
+
+5. **Create indexes:**
    ```bash
    kafssindex --mode=create mydb
    ```
 
-4. **Check database information:**
+6. **Add subset information:**
+   ```bash
+   kafsssubset --subset=pathogenic bacteria_ids.txt mydb
+   ```
+
+7. **Check database information:**
    ```bash
    kafssdbinfo mydb
    ```
 
-5. **Search sequences:**
+8. **Search sequences:**
    ```bash
    kafsssearch --db=mydb --subset=pathogenic query.fasta results.tsv
    ```

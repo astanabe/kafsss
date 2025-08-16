@@ -3,7 +3,7 @@ BINDIR ?= $(PREFIX)/bin
 PERL ?= $(filter /%,$(shell /bin/sh -c 'type perl'))
 VERSION := 0.1.2025.07.13
 YEAR := 2025
-PROGRAM := kafssdbinfo kafssdedup kafssfreq kafssindex kafsssubset kafsssearch kafsssearchclient kafssstore
+PROGRAM := kafssdbinfo kafssdedup kafssfreq kafssindex kafsspart kafsssubset kafsssearch kafsssearchclient kafssstore
 
 all: $(PROGRAM)
 

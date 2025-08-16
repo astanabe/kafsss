@@ -973,20 +973,11 @@ sub perform_database_search {
     # Set minimum shared key rate if specified
     if (defined $request->{minpsharedkey} && $request->{minpsharedkey} ne '') {
         eval {
-            $dbh->do("SET kmersearch.min_shared_ngram_key_rate = $request->{minpsharedkey}");
+            $dbh->do("SET kmersearch.min_shared_kmer_rate = $request->{minpsharedkey}");
         };
         if ($@) {
             die "Failed to set minimum shared key rate: $@";
         }
-    }
-    
-    # Set rawscore cache max entries (maxnseq * 2)
-    my $rawscore_cache_max_entries = $request->{maxnseq} * 2;
-    eval {
-        $dbh->do("SET kmersearch.rawscore_cache_max_entries = $rawscore_cache_max_entries");
-    };
-    if ($@) {
-        die "Failed to set rawscore cache max entries: $@";
     }
     
     # Get ovllen from kafsss_meta table for query validation
@@ -1014,16 +1005,16 @@ sub perform_database_search {
         push @params, $request->{subset};
     }
     
-    # Add ORDER BY and LIMIT to inner query (use rawscore for performance)
-    $inner_sql .= " ORDER BY kmersearch_rawscore(seq, ?) DESC LIMIT ?";
+    # Add ORDER BY and LIMIT to inner query (use matchscore for performance)
+    $inner_sql .= " ORDER BY kmersearch_matchscore(seq, ?) DESC LIMIT ?";
     push @params, $request->{queryseq}, $request->{maxnseq};
     
-    # Build outer query with corrected score sorting
+    # Build outer query with match score sorting
     my $sql;
     if ($request->{mode} eq 'maximum') {
-        $sql = "SELECT kmersearch_correctedscore(seq, ?) AS score, seqid, seq FROM ($inner_sql) selected_rows ORDER BY score DESC";
+        $sql = "SELECT kmersearch_matchscore(seq, ?) AS score, seqid, seq FROM ($inner_sql) selected_rows ORDER BY score DESC";
     } else {
-        $sql = "SELECT kmersearch_correctedscore(seq, ?) AS score, seqid FROM ($inner_sql) selected_rows ORDER BY score DESC";
+        $sql = "SELECT kmersearch_matchscore(seq, ?) AS score, seqid FROM ($inner_sql) selected_rows ORDER BY score DESC";
     }
     
     # Add parameters for outer query

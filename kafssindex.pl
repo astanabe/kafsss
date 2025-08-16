@@ -287,6 +287,44 @@ sub create_indexes {
     # Validate and set memory parameters
     validate_and_set_memory_parameters($dbh, $workingmemory, $maintenanceworkingmemory, $temporarybuffer);
     
+    # Get data type of seq column for operator class selection
+    my $type_check_sql = "SELECT CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type " .
+                         "FROM information_schema.columns WHERE table_name = 'kafsss_data' AND column_name = 'seq'";
+    my $type_sth = $dbh->prepare($type_check_sql);
+    $type_sth->execute();
+    my ($seq_data_type) = $type_sth->fetchrow_array();
+    $type_sth->finish();
+    
+    # Calculate total bits for operator class selection
+    my $total_bits = $kmer_size * 2 + $occur_bitlen;
+    my $op_class;
+    
+    if (lc($seq_data_type) eq 'dna4') {
+        if ($total_bits <= 16) {
+            $op_class = "kmersearch_dna4_gin_ops_int2";
+        } elsif ($total_bits <= 32) {
+            $op_class = "kmersearch_dna4_gin_ops_int4";
+        } elsif ($total_bits <= 64) {
+            $op_class = "kmersearch_dna4_gin_ops_int8";
+        } else {
+            die "Total bits ($total_bits) exceeds 64 for DNA4 type\n";
+        }
+    } elsif (lc($seq_data_type) eq 'dna2') {
+        if ($total_bits <= 16) {
+            $op_class = "kmersearch_dna2_gin_ops_int2";
+        } elsif ($total_bits <= 32) {
+            $op_class = "kmersearch_dna2_gin_ops_int4";
+        } elsif ($total_bits <= 64) {
+            $op_class = "kmersearch_dna2_gin_ops_int8";
+        } else {
+            die "Total bits ($total_bits) exceeds 64 for DNA2 type\n";
+        }
+    } else {
+        die "Unknown data type for seq column: $seq_data_type\n";
+    }
+    
+    print "Selected operator class: $op_class (data_type=$seq_data_type, kmer_size=$kmer_size, occur_bitlen=$occur_bitlen, total_bits=$total_bits)\n";
+    
     # Determine if high-frequency analysis should be performed
     my $should_perform_highfreq_analysis = ($max_appearance_rate > 0 || $max_appearance_nrow > 0);
     my $highfreq_kmer_count = 0;
@@ -336,13 +374,13 @@ sub create_indexes {
     # Check if indexes already exist
     my $existing_indexes = get_existing_indexes($dbh);
     
-    # Create seq column GIN index
+    # Create seq column GIN index with operator class
     my $seq_index_name = 'idx_kafsss_data_seq_gin';
     if (exists $existing_indexes->{$seq_index_name}) {
         print "Index '$seq_index_name' already exists, skipping...\n";
     } else {
-        print "Creating index '$seq_index_name'...\n";
-        my $seq_sql = "CREATE INDEX $seq_index_name ON kafsss_data USING gin(seq)";
+        print "Creating index '$seq_index_name' with operator class '$op_class'...\n";
+        my $seq_sql = "CREATE INDEX $seq_index_name ON kafsss_data USING gin(seq $op_class)";
         if ($tablespace) {
             $seq_sql .= " TABLESPACE \"$tablespace\"";
         }

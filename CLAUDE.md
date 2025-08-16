@@ -2,9 +2,92 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Language Usage Guidelines
+
+- **Dialogue/Conversation**: Use Japanese
+- **Source Code**: Use English only
+- **Comments**: Use English only (in source code)
+- **Commit Messages**: Use English only
+- **Documentation**: 
+  - `CLAUDE.md`: Use English only
+  - `README.md`: Use English only
+  - Other documentation: English preferred
+
+## Important Development Principles
+
+- **No speculation or assumptions**: Never make changes or write documentation based on speculation or assumptions. Always verify information before making any changes or documentation updates.
+- **Fact-checking**: When uncertain about technical details, check the actual source code, documentation, or ask for clarification rather than guessing.
+- **Verify possibilities**: Never leave "possibilities" or "might be" statements unresolved. Always confirm and verify to reach definitive conclusions. Do not make decisions or leave issues unaddressed based on uncertain possibilities.
+- **Error recovery**: When mistakes are made, do not attempt to patch or cover up errors. Instead, restore the previous state from backups or git repository. Use `git checkout`, `git reset`, or restore from backup files rather than making additional changes to fix mistakes.
+- **Git commit restrictions**: 
+  - **Never commit without explicit instruction** from the user
+  - **Never use `git add -A` or `git add .`** especially when temporary files exist
+  - **Always add files selectively** using specific file paths
+  - **Check git status** before any add operation to understand what will be staged
+
 ## Project Overview
 
 The kafsss (K-mer based Alignment-Free Splitted Sequence Search) suite is a comprehensive Perl-based toolkit for DNA sequence analysis using k-mer similarity search with PostgreSQL and the pg_kmersearch extension. The system consists of command-line tools for sequence storage, indexing, searching, and web servers for remote API access with asynchronous job processing.
+
+## Important Notes on pg_kmersearch Compatibility
+
+**This project requires the latest version of pg_kmersearch extension. Compatibility with older versions is not maintained.**
+
+The codebase assumes the following pg_kmersearch features from the latest version:
+- Function name: `kmersearch_matchscore()` (not rawscore/correctedscore)
+- GUC variables: `kmersearch.min_shared_kmer_rate` (not min_shared_ngram_key_rate)
+- Rawscore cache has been completely removed (kmersearch.rawscore_cache_max_entries no longer exists)
+- GIN index creation requires explicit operator class specification (e.g., `kmersearch_dna4_gin_ops_int4`)
+
+### Required GUC Variable Settings
+
+The following GUC variables must be set every time a PostgreSQL database connection is established:
+
+**kafssfreq**:
+- `kmersearch.kmer_size`
+- `kmersearch.occur_bitlen`
+- `kmersearch.max_appearance_rate`
+- `kmersearch.max_appearance_nrow`
+
+**kafssindex**:
+- `kmersearch.kmer_size`
+- `kmersearch.occur_bitlen`
+- `kmersearch.max_appearance_rate`
+- `kmersearch.max_appearance_nrow`
+- `kmersearch.preclude_highfreq_kmer`
+- `kmersearch.force_use_parallel_highfreq_kmer_cache`
+
+**kafsssearch**:
+- `kmersearch.kmer_size`
+- `kmersearch.occur_bitlen`
+- `kmersearch.max_appearance_rate`
+- `kmersearch.max_appearance_nrow`
+- `kmersearch.preclude_highfreq_kmer`
+- `kmersearch.force_use_parallel_highfreq_kmer_cache`
+- `kmersearch.min_score`
+- `kmersearch.min_shared_kmer_rate`
+
+**kafsssearchserver.\*** (all server variants):
+- `kmersearch.kmer_size`
+- `kmersearch.occur_bitlen`
+- `kmersearch.max_appearance_rate`
+- `kmersearch.max_appearance_nrow`
+- `kmersearch.preclude_highfreq_kmer`
+- `kmersearch.force_use_parallel_highfreq_kmer_cache`
+- `kmersearch.min_score`
+- `kmersearch.min_shared_kmer_rate`
+
+## Workflow
+
+The typical kafsss workflow is as follows:
+
+1. **kafssstore**: Create database and register sequence data
+2. **kafssdedup**: Merge identical sequences to reduce row count and storage (verify partition table compatibility)
+3. **kafsspart**: Partition kafsss_data table for improved performance
+4. **kafssfreq**: Perform k-mer frequency analysis (stores high-frequency k-mers in system tables)
+5. **kafssindex**: Build GIN index with k-mers as keys (excludes high-frequency k-mers)
+6. **kafsssubset**: Register subset names to enable subset-specific search results
+7. **kafsssearch** or **kafsssearchserver.\***: Retrieve IDs (and optionally sequences) of sequences similar to query sequence from database
 
 ## Core Components
 
@@ -16,6 +99,7 @@ The kafsss (K-mer based Alignment-Free Splitted Sequence Search) suite is a comp
 - `kafsssubset` - Database subset management utilities (add/remove subset labels)
 - `kafssdbinfo` - Database information and statistics
 - `kafssdedup` - Sequence deduplication tool
+- `kafsspart` - Partition kafsss_data table using pg_kmersearch's partition function
 - `kafssfreq` - K-mer frequency analysis tool
 - `calcsegment` - Sequence segmentation calculations (utility planned)
 
