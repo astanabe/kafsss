@@ -284,6 +284,14 @@ sub create_indexes {
     
     print "Creating GIN indexes...\n";
     
+    # Check if kafsss_data is a partitioned table
+    my $is_partitioned = check_if_partitioned($dbh, 'kafsss_data');
+    if ($is_partitioned) {
+        print "Table 'kafsss_data' is partitioned.\n";
+    } else {
+        print "Table 'kafsss_data' is not partitioned.\n";
+    }
+    
     # Validate and set memory parameters
     validate_and_set_memory_parameters($dbh, $workingmemory, $maintenanceworkingmemory, $temporarybuffer);
     
@@ -329,6 +337,7 @@ sub create_indexes {
     my $should_perform_highfreq_analysis = ($max_appearance_rate > 0 || $max_appearance_nrow > 0);
     my $highfreq_kmer_count = 0;
     my $cache_loaded = 0;
+    my $parent_cache_loaded = 0;
     
     if ($should_perform_highfreq_analysis) {
         # Perform high-frequency k-mer analysis
@@ -343,9 +352,24 @@ sub create_indexes {
         print "High-frequency k-mer analysis found $highfreq_kmer_count high-frequency k-mers.\n";
         
         if ($highfreq_kmer_count > 0) {
-            # Load cache before creating indexes
-            load_cache($dbh, $pg_version);
-            $cache_loaded = 1;
+            # For partitioned tables, load cache in parent process and keep connection open
+            if ($is_partitioned) {
+                # Check if cache is already loaded (by kafsspreload or other process)
+                my $cache_already_loaded = check_cache_loaded($dbh, $pg_version);
+                
+                if (!$cache_already_loaded) {
+                    # Load cache before creating indexes
+                    load_cache($dbh, $pg_version);
+                    $cache_loaded = 1;
+                } else {
+                    print "High-frequency k-mer cache is already loaded.\n";
+                }
+                $parent_cache_loaded = 1;
+            } else {
+                # For non-partitioned tables, load cache normally
+                load_cache($dbh, $pg_version);
+                $cache_loaded = 1;
+            }
             
             # Enable high-frequency k-mer exclusion
             eval {
@@ -373,6 +397,33 @@ sub create_indexes {
     
     # Check if indexes already exist
     my $existing_indexes = get_existing_indexes($dbh);
+    
+    if ($is_partitioned) {
+        # Create indexes on partitioned table
+        create_partitioned_indexes($dbh, $pg_version, $op_class, $tablespace, 
+                                   $parent_cache_loaded, $highfreq_kmer_count);
+    } else {
+        # Create indexes on regular table
+        create_regular_indexes($dbh, $existing_indexes, $op_class, $tablespace);
+    }
+    
+    # Free cache after creating indexes (only if cache was loaded by this process)
+    # For partitioned tables, this happens after all partition and parent indexes are created
+    if ($cache_loaded && !$is_partitioned) {
+        free_cache($dbh, $pg_version);
+    } elsif ($cache_loaded && $is_partitioned) {
+        # For partitioned tables, free cache after all work is done
+        free_cache($dbh, $pg_version);
+    }
+    
+    # Update kafsss_meta table
+    update_meta_table($dbh);
+    
+    print "All indexes created successfully.\n";
+}
+
+sub create_regular_indexes {
+    my ($dbh, $existing_indexes, $op_class, $tablespace) = @_;
     
     # Create seq column GIN index with operator class
     my $seq_index_name = 'idx_kafsss_data_seq_gin';
@@ -433,16 +484,6 @@ sub create_indexes {
             die "Failed to create index '$seqid_index_name': $@\n";
         }
     }
-    
-    # Free cache after creating indexes (only if cache was loaded)
-    if ($cache_loaded) {
-        free_cache($dbh, $pg_version);
-    }
-    
-    # Update kafsss_meta table
-    update_meta_table($dbh);
-    
-    print "All indexes created successfully.\n";
 }
 
 sub drop_indexes {
@@ -915,4 +956,322 @@ SQL
     if ($@) {
         print STDERR "Warning: Failed to clear kafsss_meta table: $@\n";
     }
+}
+
+sub check_if_partitioned {
+    my ($dbh, $table_name) = @_;
+    
+    my $sth = $dbh->prepare(<<SQL);
+SELECT COUNT(*) 
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relname = ? 
+AND c.relkind = 'p'
+AND n.nspname = 'public'
+SQL
+    
+    $sth->execute($table_name);
+    my ($count) = $sth->fetchrow_array();
+    $sth->finish();
+    
+    return $count > 0;
+}
+
+sub get_partitions {
+    my ($dbh, $parent_table) = @_;
+    
+    my $sth = $dbh->prepare(<<SQL);
+SELECT 
+    c.relname AS partition_name
+FROM pg_inherits i
+JOIN pg_class p ON p.oid = i.inhparent
+JOIN pg_class c ON c.oid = i.inhrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE p.relname = ?
+AND n.nspname = 'public'
+ORDER BY c.relname
+SQL
+    
+    $sth->execute($parent_table);
+    
+    my @partitions = ();
+    while (my ($partition_name) = $sth->fetchrow_array()) {
+        push @partitions, $partition_name;
+    }
+    $sth->finish();
+    
+    return @partitions;
+}
+
+sub check_cache_loaded {
+    my ($dbh, $pg_version) = @_;
+    
+    my $loaded = 0;
+    
+    # Try to check if cache is loaded by examining pg_kmersearch system catalogs
+    # Since there's no direct status function, we check if the cache is in use
+    eval {
+        if ($pg_version >= 18) {
+            # For PostgreSQL 18+, check if parallel cache is in use
+            # We can try to query the system view or check GUC settings
+            my $sth = $dbh->prepare("SHOW kmersearch.force_use_parallel_highfreq_kmer_cache");
+            $sth->execute();
+            my ($setting) = $sth->fetchrow_array();
+            $sth->finish();
+            
+            # If it's set to true, cache might be loaded
+            if ($setting && $setting eq 'on') {
+                # Try to verify by checking system catalog
+                my $check_sth = $dbh->prepare(<<SQL);
+SELECT COUNT(*) 
+FROM kmersearch_parallel_highfreq_kmer_cache
+WHERE table_oid = 'kafsss_data'::regclass
+AND column_name = 'seq'
+SQL
+                eval {
+                    $check_sth->execute();
+                    my ($count) = $check_sth->fetchrow_array();
+                    $check_sth->finish();
+                    $loaded = ($count > 0) ? 1 : 0;
+                };
+                if ($@) {
+                    # Table might not exist or be accessible
+                    $loaded = 0;
+                }
+            }
+        }
+    };
+    
+    if ($@) {
+        # If check fails, assume not loaded
+        print "Could not check cache status: $@\n" if $verbose;
+        $loaded = 0;
+    }
+    
+    return $loaded;
+}
+
+sub create_partitioned_indexes {
+    my ($dbh, $pg_version, $op_class, $tablespace, $parent_cache_loaded, $highfreq_kmer_count) = @_;
+    
+    print "Creating indexes on partitioned table...\n";
+    
+    # Get list of partitions
+    my @partitions = get_partitions($dbh, 'kafsss_data');
+    
+    if (@partitions == 0) {
+        print "No partitions found for kafsss_data table.\n";
+        return;
+    }
+    
+    print "Found " . scalar(@partitions) . " partitions.\n";
+    
+    # Determine number of parallel workers
+    my $max_workers = $numthreads > 0 ? $numthreads : 4;
+    my $num_workers = (@partitions < $max_workers) ? @partitions : $max_workers;
+    
+    print "Using $num_workers worker processes for parallel index creation.\n";
+    
+    # Create indexes on partitions in parallel
+    create_partition_indexes_parallel(\@partitions, $num_workers, $op_class, $tablespace, 
+                                      $pg_version, $highfreq_kmer_count);
+    
+    # After all partition indexes are created, create indexes on parent table
+    print "Creating indexes on parent table 'kafsss_data'...\n";
+    
+    # Create seq column GIN index on parent table
+    my $seq_index_name = 'idx_kafsss_data_seq_gin';
+    print "Creating parent index '$seq_index_name' with operator class '$op_class'...\n";
+    my $seq_sql = "CREATE INDEX $seq_index_name ON kafsss_data USING gin(seq $op_class)";
+    if ($tablespace) {
+        $seq_sql .= " TABLESPACE \"$tablespace\"";
+    }
+    
+    eval {
+        $dbh->do($seq_sql);
+        print "Parent index '$seq_index_name' created successfully.\n";
+    };
+    if ($@) {
+        die "Failed to create parent index '$seq_index_name': $@\n";
+    }
+    
+    # Create subset column GIN index on parent table
+    my $subset_index_name = 'idx_kafsss_data_subset_gin';
+    print "Creating parent index '$subset_index_name'...\n";
+    my $subset_sql = "CREATE INDEX $subset_index_name ON kafsss_data USING gin(subset)";
+    if ($tablespace) {
+        $subset_sql .= " TABLESPACE \"$tablespace\"";
+    }
+    
+    eval {
+        $dbh->do($subset_sql);
+        print "Parent index '$subset_index_name' created successfully.\n";
+    };
+    if ($@) {
+        die "Failed to create parent index '$subset_index_name': $@\n";
+    }
+    
+    # Create seqid column GIN index on parent table
+    my $seqid_index_name = 'idx_kafsss_data_seqid_gin';
+    print "Creating parent index '$seqid_index_name'...\n";
+    my $seqid_sql = "CREATE INDEX $seqid_index_name ON kafsss_data USING gin(seqid)";
+    if ($tablespace) {
+        $seqid_sql .= " TABLESPACE \"$tablespace\"";
+    }
+    
+    eval {
+        $dbh->do($seqid_sql);
+        print "Parent index '$seqid_index_name' created successfully.\n";
+    };
+    if ($@) {
+        die "Failed to create parent index '$seqid_index_name': $@\n";
+    }
+}
+
+sub create_partition_indexes_parallel {
+    my ($partitions_ref, $num_workers, $op_class, $tablespace, $pg_version, $highfreq_kmer_count) = @_;
+    my @partitions = @$partitions_ref;
+    
+    use POSIX ':sys_wait_h';
+    
+    my %active_workers = ();
+    my $partition_index = 0;
+    
+    while ($partition_index < @partitions || keys %active_workers > 0) {
+        # Start new workers if we have capacity and partitions to process
+        while (keys %active_workers < $num_workers && $partition_index < @partitions) {
+            my $partition = $partitions[$partition_index];
+            $partition_index++;
+            
+            my $pid = fork();
+            if (!defined $pid) {
+                die "Failed to fork worker process: $!\n";
+            } elsif ($pid == 0) {
+                # Child process
+                create_partition_index_worker($partition, $op_class, $tablespace, 
+                                             $pg_version, $highfreq_kmer_count);
+                exit 0;
+            } else {
+                # Parent process
+                $active_workers{$pid} = $partition;
+                print "Started worker PID $pid for partition '$partition'\n";
+            }
+        }
+        
+        # Wait for any worker to finish
+        my $finished_pid = waitpid(-1, WNOHANG);
+        if ($finished_pid > 0) {
+            my $partition = $active_workers{$finished_pid};
+            my $exit_status = $? >> 8;
+            
+            if ($exit_status == 0) {
+                print "Worker PID $finished_pid completed successfully for partition '$partition'\n";
+            } else {
+                die "Worker PID $finished_pid failed for partition '$partition' with exit code $exit_status\n";
+            }
+            
+            delete $active_workers{$finished_pid};
+        }
+        
+        # Brief sleep to avoid busy waiting
+        select(undef, undef, undef, 0.1) if keys %active_workers > 0;
+    }
+}
+
+sub create_partition_index_worker {
+    my ($partition_name, $op_class, $tablespace, $pg_version, $highfreq_kmer_count) = @_;
+    
+    # Each worker creates its own database connection
+    my $password = $ENV{PGPASSWORD} || '';
+    my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
+    
+    my $worker_dbh = DBI->connect($dsn, $username, $password, {
+        RaiseError => 1,
+        AutoCommit => 1,
+        pg_enable_utf8 => 1
+    }) or die "Worker cannot connect to database '$database_name': $DBI::errstr\n";
+    
+    # Set GUC variables in worker
+    eval {
+        $worker_dbh->do("SET kmersearch.kmer_size = $kmer_size");
+        $worker_dbh->do("SET kmersearch.occur_bitlen = $occur_bitlen");
+        $worker_dbh->do("SET kmersearch.max_appearance_rate = $max_appearance_rate");
+        $worker_dbh->do("SET kmersearch.max_appearance_nrow = $max_appearance_nrow");
+        
+        if ($highfreq_kmer_count > 0) {
+            $worker_dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
+            if ($pg_version >= 18) {
+                $worker_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
+            }
+        } else {
+            $worker_dbh->do("SET kmersearch.preclude_highfreq_kmer = false");
+            if ($pg_version >= 18) {
+                $worker_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
+            }
+        }
+    };
+    if ($@) {
+        die "Worker failed to set GUC variables: $@\n";
+    }
+    
+    # Set memory parameters
+    eval {
+        $worker_dbh->do("SET work_mem = '$workingmemory'");
+        $worker_dbh->do("SET maintenance_work_mem = '$maintenanceworkingmemory'");
+        $worker_dbh->do("SET temp_buffers = '$temporarybuffer'");
+    };
+    if ($@) {
+        die "Worker failed to set memory parameters: $@\n";
+    }
+    
+    # Create indexes on partition
+    print "[Worker $$] Creating indexes on partition '$partition_name'...\n";
+    
+    # Create seq column GIN index
+    my $seq_index_name = "idx_${partition_name}_seq_gin";
+    my $seq_sql = "CREATE INDEX IF NOT EXISTS $seq_index_name ON $partition_name USING gin(seq $op_class)";
+    if ($tablespace) {
+        $seq_sql .= " TABLESPACE \"$tablespace\"";
+    }
+    
+    eval {
+        $worker_dbh->do($seq_sql);
+        print "[Worker $$] Index '$seq_index_name' created.\n";
+    };
+    if ($@) {
+        die "[Worker $$] Failed to create index '$seq_index_name': $@\n";
+    }
+    
+    # Create subset column GIN index
+    my $subset_index_name = "idx_${partition_name}_subset_gin";
+    my $subset_sql = "CREATE INDEX IF NOT EXISTS $subset_index_name ON $partition_name USING gin(subset)";
+    if ($tablespace) {
+        $subset_sql .= " TABLESPACE \"$tablespace\"";
+    }
+    
+    eval {
+        $worker_dbh->do($subset_sql);
+        print "[Worker $$] Index '$subset_index_name' created.\n";
+    };
+    if ($@) {
+        die "[Worker $$] Failed to create index '$subset_index_name': $@\n";
+    }
+    
+    # Create seqid column GIN index
+    my $seqid_index_name = "idx_${partition_name}_seqid_gin";
+    my $seqid_sql = "CREATE INDEX IF NOT EXISTS $seqid_index_name ON $partition_name USING gin(seqid)";
+    if ($tablespace) {
+        $seqid_sql .= " TABLESPACE \"$tablespace\"";
+    }
+    
+    eval {
+        $worker_dbh->do($seqid_sql);
+        print "[Worker $$] Index '$seqid_index_name' created.\n";
+    };
+    if ($@) {
+        die "[Worker $$] Failed to create index '$seqid_index_name': $@\n";
+    }
+    
+    $worker_dbh->disconnect();
+    print "[Worker $$] Completed indexing partition '$partition_name'.\n";
 }
