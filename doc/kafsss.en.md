@@ -4,7 +4,7 @@ A comprehensive toolkit for storing, managing, and searching DNA sequences using
 
 ## Overview
 
-The kafsss suite provides a complete solution for DNA sequence analysis using k-mer similarity search. The toolkit consists of 11 Perl scripts that handle different aspects of DNA sequence management, search operations, and server deployment with asynchronous job processing.
+The kafsss suite provides a complete solution for DNA sequence analysis using k-mer similarity search. The toolkit consists of Perl scripts that handle different aspects of DNA sequence management, search operations, and server deployment with asynchronous job processing.
 
 ## Prerequisites
 
@@ -381,6 +381,94 @@ cat sequences.fasta | kafssstore stdin mydb
 kafssstore --datatype=DNA2 --minlen=100000 sequences.fasta mydb
 ```
 
+### kafssdedup
+
+**Purpose**: Remove duplicate sequences from kafsss_data table.
+
+**Usage**: `kafssdedup [options] database_name`
+
+**Options**:
+- `--host=HOST` - PostgreSQL server host
+- `--port=PORT` - PostgreSQL server port
+- `--username=USER` - PostgreSQL username
+- `--workingmemory=SIZE` - Working memory for deduplication (default: 8GB)
+- `--maintenanceworkingmemory=SIZE` - Maintenance working memory (default: 8GB)
+- `--temporarybuffer=SIZE` - Temporary buffer size (default: 512MB)
+- `--verbose` - Show detailed processing messages
+- `--help` - Show help message
+
+**Example**:
+```bash
+# Basic deduplication
+kafssdedup mydb
+
+# With custom memory settings
+kafssdedup --workingmemory=32GB mydb
+```
+
+### kafsspart
+
+**Purpose**: Partition kafsss_data table using pg_kmersearch's partition function for improved performance.
+
+**Usage**: `kafsspart [options] database_name`
+
+**Required Options**:
+- `--npart=INT` - Number of partitions (must be 2 or greater)
+
+**Optional Arguments**:
+- `--host=HOST` - Database server host
+- `--port=PORT` - Database server port
+- `--username=USER` - Database user name
+- `--tablespace=NAME` - Tablespace name for partitions
+- `--verbose` - Enable verbose output
+- `--help` - Show help message
+
+**Example**:
+```bash
+# Partition into 16 partitions
+kafsspart --npart=16 mydb
+
+# Partition with specific tablespace
+kafsspart --npart=32 --tablespace=fast_ssd mydb
+```
+
+### kafssfreq
+
+**Purpose**: Perform high-frequency k-mer analysis on kafsss_data table.
+
+**Usage**: `kafssfreq [options] database_name`
+
+**Required Options**:
+- `--mode=MODE` - Operation mode: 'create' or 'drop'
+
+**Optional Arguments**:
+- `--host=HOST` - PostgreSQL server host
+- `--port=PORT` - PostgreSQL server port
+- `--username=USER` - PostgreSQL username
+- `--kmersize=INT` - K-mer length for analysis (default: 8, range: 4-64)
+- `--maxpappear=REAL` - Max k-mer appearance rate (default: 0.5, range: 0.0-1.0)
+- `--maxnappear=INT` - Max rows containing k-mer (default: 0=unlimited)
+- `--occurbitlen=INT` - Bits for occurrence count (default: 8, range: 0-16)
+- `--numthreads=INT` - Number of parallel workers (default: 0=auto)
+- `--workingmemory=SIZE` - Work memory for each operation (default: 8GB)
+- `--maintenanceworkingmemory=SIZE` - Maintenance work memory (default: 8GB)
+- `--temporarybuffer=SIZE` - Temporary buffer size (default: 512MB)
+- `--verbose` - Show detailed processing messages
+- `--overwrite` - Overwrite existing analysis (only for --mode=create)
+- `--help` - Show help message
+
+**Example**:
+```bash
+# Create frequency analysis
+kafssfreq --mode=create mydb
+
+# With custom parameters
+kafssfreq --mode=create --kmersize=16 --numthreads=32 mydb
+
+# Drop frequency analysis
+kafssfreq --mode=drop mydb
+```
+
 ### kafsssubset
 
 Add or remove subset information for sequences based on accession numbers or apply operations to all rows.
@@ -451,6 +539,34 @@ kafssindex --mode=create --tablespace=fast_ssd mydb
 kafssindex --mode=drop mydb
 ```
 
+### kafsspreload
+
+**Purpose**: Preload high-frequency k-mer cache into memory for acceleration.
+
+**Usage**: `kafsspreload [options] database_name`
+
+**Options**:
+- `--host=HOST` - PostgreSQL server host
+- `--port=PORT` - PostgreSQL server port
+- `--username=USER` - PostgreSQL username
+- `--verbose` - Enable verbose output
+- `--help` - Show help message
+
+**Notes**:
+- Runs as a daemon process that maintains database connection
+- Monitors for changes hourly and exits gracefully when changes detected
+- While running, accelerates kafssindex builds and kafsssearch operations
+- Requires pg_kmersearch extension and kafssfreq to be run first
+
+**Example**:
+```bash
+# Preload cache (runs as daemon)
+kafsspreload mydb
+
+# With verbose logging
+kafsspreload --verbose mydb
+```
+
 ### kafsssearch
 
 Search DNA sequences using k-mer similarity.
@@ -463,8 +579,10 @@ kafsssearch [options] input_file output_file
 #### Options
 - `--db=DATABASE` - PostgreSQL database name (required)
 - `--subset=NAME` - Limit search to specific subset
-- `--maxnseq=INT` - Maximum number of results per query (default: 1000)
-- `--minscore=INT` - Minimum score threshold
+- `--maxnseq=INT` - Maximum number of results per query (default: 1000, 0=unlimited)
+- `--minscore=INT` - Minimum score threshold (default: 1)
+- `--minpsharedkmer=REAL` - Minimum percentage of shared k-mers (0.0-1.0, default: 0.5)
+- `--mode=MODE` - Output mode: minimum (min), matchscore (score), sequence (seq), maximum (max) (default: matchscore)
 - `--numthreads=INT` - Number of parallel threads (default: 1)
 
 #### Input/Output Files
@@ -472,11 +590,12 @@ kafsssearch [options] input_file output_file
 - Output: TSV format, use `-`, `stdout`, or `STDOUT` for standard output
 
 #### Output Format
-Tab-separated values with 4 columns:
+Tab-separated values with columns (varies by mode):
 1. Query sequence number (1-based)
 2. Query FASTA label
-3. CORRECTEDSCORE from pg_kmersearch
-4. Comma-separated seqid list
+3. Comma-separated seqid list from seqid column
+4. Match score from kmersearch_matchscore function (only in matchscore and maximum modes)
+5. Sequence data (only in sequence and maximum modes)
 
 #### Examples
 ```bash
@@ -550,8 +669,10 @@ kafsssearchclient --jobs
 - `--serverlist=FILE` - File containing server URLs (one per line)
 - `--db=DATABASE` - PostgreSQL database name (optional if server has default)
 - `--subset=NAME` - Limit search to specific subset (optional)
-- `--maxnseq=INT` - Maximum number of results per query (default: 1000)
-- `--minscore=INT` - Minimum score threshold (optional)
+- `--maxnseq=INT` - Maximum number of results per query (default: 1000, 0=unlimited)
+- `--minscore=INT` - Minimum score threshold (default: 1)
+- `--minpsharedkmer=REAL` - Minimum percentage of shared k-mers (0.0-1.0, default: 0.5)
+- `--mode=MODE` - Output mode: minimum (min), matchscore (score), sequence (seq), maximum (max) (default: matchscore)
 - `--numthreads=INT` - Number of parallel threads (default: 1)
 - `--maxnretry=INT` - Maximum retries per status check (default: 0 = unlimited)
 - `--maxnretry_total=INT` - Maximum total retries for all operations (default: 100)
@@ -667,8 +788,9 @@ Edit default values in the script header:
 ```perl
 my $default_database = 'mykmersearch';  # Default database name
 my $default_subset = 'bacteria';     # Default subset name
-my $default_maxnseq = 1000;             # Default max results
-my $default_minscore = '10';            # Default min score
+my $default_maxnseq = 1000;             # Default max results (0=unlimited)
+my $default_minscore = 1;               # Default min score
+my $default_minpsharedkmer = 0.5;       # Default minimum shared k-mer rate
 my $default_numthreads = 5;             # Number of parallel threads
 ```
 

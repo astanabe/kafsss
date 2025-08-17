@@ -4,7 +4,7 @@ pg_kmersearch拡張を使用してPostgreSQLでDNA配列の保存、管理、検
 
 ## 概要
 
-kafsss suiteは、k-mer類似性検索を使用したDNA配列解析の完全なソリューションを提供します。ツールキットは、DNA配列管理、検索操作、非同期ジョブ処理によるサーバーデプロイメントの異なる側面を処理する11のPerlスクリプトで構成されています。
+kafsss suiteは、k-mer類似性検索を使用したDNA配列解析の完全なソリューションを提供します。ツールキットは、DNA配列管理、検索操作、非同期ジョブ処理によるサーバーデプロイメントの異なる側面を処理するPerlスクリプトで構成されています。
 
 ## 前提条件
 
@@ -381,6 +381,94 @@ cat sequences.fasta | kafssstore stdin mydb
 kafssstore --datatype=DNA2 --minlen=100000 sequences.fasta mydb
 ```
 
+### kafssdedup
+
+**目的**: kafsss_dataテーブルから重複配列を削除します。
+
+**使用方法**: `kafssdedup [オプション] データベース名`
+
+**オプション**:
+- `--host=HOST` - PostgreSQLサーバーホスト
+- `--port=PORT` - PostgreSQLサーバーポート
+- `--username=USER` - PostgreSQLユーザー名
+- `--workingmemory=SIZE` - 重複除去用作業メモリ（デフォルト: 8GB）
+- `--maintenanceworkingmemory=SIZE` - メンテナンス作業メモリ（デフォルト: 8GB）
+- `--temporarybuffer=SIZE` - 一時バッファサイズ（デフォルト: 512MB）
+- `--verbose` - 詳細処理メッセージを表示
+- `--help` - ヘルプメッセージを表示
+
+**例**:
+```bash
+# 基本的な重複除去
+kafssdedup mydb
+
+# カスタムメモリ設定
+kafssdedup --workingmemory=32GB mydb
+```
+
+### kafsspart
+
+**目的**: pg_kmersearchのパーティション関数を使用してkafsss_dataテーブルをパーティション化し、パフォーマンスを向上させます。
+
+**使用方法**: `kafsspart [オプション] データベース名`
+
+**必須オプション**:
+- `--npart=INT` - パーティション数（2以上）
+
+**任意オプション**:
+- `--host=HOST` - データベースサーバーホスト
+- `--port=PORT` - データベースサーバーポート
+- `--username=USER` - データベースユーザー名
+- `--tablespace=NAME` - パーティション用テーブルスペース名
+- `--verbose` - 詳細出力を有効化
+- `--help` - ヘルプメッセージを表示
+
+**例**:
+```bash
+# 16パーティションに分割
+kafsspart --npart=16 mydb
+
+# 特定のテーブルスペースを使用
+kafsspart --npart=32 --tablespace=fast_ssd mydb
+```
+
+### kafssfreq
+
+**目的**: kafsss_dataテーブルの高頻度k-mer解析を実行します。
+
+**使用方法**: `kafssfreq [オプション] データベース名`
+
+**必須オプション**:
+- `--mode=MODE` - 操作モード: 'create' または 'drop'
+
+**任意オプション**:
+- `--host=HOST` - PostgreSQLサーバーホスト
+- `--port=PORT` - PostgreSQLサーバーポート
+- `--username=USER` - PostgreSQLユーザー名
+- `--kmersize=INT` - 解析用k-mer長（デフォルト: 8、範囲: 4-64）
+- `--maxpappear=REAL` - 最大k-mer出現率（デフォルト: 0.5、範囲: 0.0-1.0）
+- `--maxnappear=INT` - k-merを含む最大行数（デフォルト: 0=無制限）
+- `--occurbitlen=INT` - 出現カウント用ビット数（デフォルト: 8、範囲: 0-16）
+- `--numthreads=INT` - 並列ワーカー数（デフォルト: 0=自動）
+- `--workingmemory=SIZE` - 各操作の作業メモリ（デフォルト: 8GB）
+- `--maintenanceworkingmemory=SIZE` - メンテナンス作業メモリ（デフォルト: 8GB）
+- `--temporarybuffer=SIZE` - 一時バッファサイズ（デフォルト: 512MB）
+- `--verbose` - 詳細処理メッセージを表示
+- `--overwrite` - 既存の解析を上書き（--mode=createの場合のみ）
+- `--help` - ヘルプメッセージを表示
+
+**例**:
+```bash
+# 頻度解析を作成
+kafssfreq --mode=create mydb
+
+# カスタムパラメータで作成
+kafssfreq --mode=create --kmersize=16 --numthreads=32 mydb
+
+# 頻度解析を削除
+kafssfreq --mode=drop mydb
+```
+
 ### kafsssubset
 
 アクセッション番号に基づく配列またはデータベース全体に対してサブセット情報の追加・削除を行います。
@@ -451,6 +539,34 @@ kafssindex --mode=create --tablespace=fast_ssd mydb
 kafssindex --mode=drop mydb
 ```
 
+### kafsspreload
+
+**目的**: 高頻度k-merキャッシュをメモリにプリロードして高速化します。
+
+**使用方法**: `kafsspreload [オプション] データベース名`
+
+**オプション**:
+- `--host=HOST` - PostgreSQLサーバーホスト
+- `--port=PORT` - PostgreSQLサーバーポート
+- `--username=USER` - PostgreSQLユーザー名
+- `--verbose` - 詳細出力を有効化
+- `--help` - ヘルプメッセージを表示
+
+**注意**:
+- データベース接続を維持するデーモンプロセスとして動作
+- 1時間ごとに変更を監視し、変更を検出すると正常終了
+- 動作中はkafssindexの構築やkafsssearchの操作が高速化
+- pg_kmersearch拡張とkafssfreqの実行が必要
+
+**例**:
+```bash
+# キャッシュをプリロード（デーモンとして動作）
+kafsspreload mydb
+
+# 詳細ログ付き
+kafsspreload --verbose mydb
+```
+
 ### kafsssearch
 
 k-mer類似性を使用してDNA配列を検索します。
@@ -463,8 +579,10 @@ kafsssearch [オプション] 入力ファイル名 出力ファイル名
 #### オプション
 - `--db=DATABASE` - PostgreSQLデータベース名（必須）
 - `--subset=NAME` - 特定のサブセットに検索を限定
-- `--maxnseq=INT` - クエリあたりの最大結果数（デフォルト: 1000）
-- `--minscore=INT` - 最小スコア閾値
+- `--maxnseq=INT` - クエリあたりの最大結果数（デフォルト: 1000、0=無制限）
+- `--minscore=INT` - 最小スコア閾値（デフォルト: 1）
+- `--minpsharedkmer=REAL` - 共有k-merの最小割合（0.0-1.0、デフォルト: 0.5）
+- `--mode=MODE` - 出力モード: minimum (min)、matchscore (score)、sequence (seq)、maximum (max)（デフォルト: matchscore）
 - `--numthreads=INT` - 並列スレッド数（デフォルト: 1）
 
 #### 入出力ファイル
@@ -472,11 +590,12 @@ kafsssearch [オプション] 入力ファイル名 出力ファイル名
 - 出力: TSV形式、標準出力の場合は `-`、`stdout`、または `STDOUT`
 
 #### 出力形式
-4つのカラムを持つタブ区切り値：
+タブ区切り値（モードにより可変）：
 1. クエリ配列番号（1ベース）
 2. クエリFASTAラベル
-3. pg_kmersearchのCORRECTEDSCORE
-4. カンマ区切りのseqidリスト
+3. seqidカラムからのカンマ区切りseqidリスト
+4. kmersearch_matchscore関数からのマッチスコア（matchscoreおよびmaximumモードのみ）
+5. 配列データ（sequenceおよびmaximumモードのみ）
 
 #### 使用例
 ```bash
@@ -550,8 +669,10 @@ kafsssearchclient --jobs
 - `--serverlist=FILE` - サーバURLを記載したファイル（1行に1つ）
 - `--db=DATABASE` - PostgreSQLデータベース名（サーバーにデフォルト設定があればオプション）
 - `--subset=NAME` - 特定のサブセットに検索を限定（オプション）
-- `--maxnseq=INT` - クエリあたりの最大結果数（デフォルト: 1000）
-- `--minscore=INT` - 最小スコア閾値（オプション）
+- `--maxnseq=INT` - クエリあたりの最大結果数（デフォルト: 1000、0=無制限）
+- `--minscore=INT` - 最小スコア閾値（デフォルト: 1）
+- `--minpsharedkmer=REAL` - 共有k-merの最小割合（0.0-1.0、デフォルト: 0.5）
+- `--mode=MODE` - 出力モード: minimum (min)、matchscore (score)、sequence (seq)、maximum (max)（デフォルト: matchscore）
 - `--numthreads=INT` - 並列スレッド数（デフォルト: 1）
 - `--maxnretry=INT` - ステータス確認の最大リトライ数（デフォルト: 0 = 無制限）
 - `--maxnretry_total=INT` - 全操作の最大総リトライ数（デフォルト: 100）
@@ -667,8 +788,9 @@ perl kafsssearchserver.pl [オプション]
 ```perl
 my $default_database = 'mykmersearch';  # デフォルトデータベース名
 my $default_subset = 'bacteria';     # デフォルトサブセット名
-my $default_maxnseq = 1000;             # デフォルト最大結果数
-my $default_minscore = '10';            # デフォルト最小スコア
+my $default_maxnseq = 1000;             # デフォルト最大結果数（0=無制限）
+my $default_minscore = 1;               # デフォルト最小スコア
+my $default_minpsharedkmer = 0.5;       # デフォルト最小共有k-mer率
 my $default_numthreads = 5;             # 並列スレッド数
 ```
 

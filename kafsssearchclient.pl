@@ -22,8 +22,9 @@ my $default_maxnretry = 0;  # 0 means unlimited
 my $default_maxnretry_total = 100;
 my $default_retrydelay = 10;
 my $default_failedserverexclusion = -1;  # -1 means infinite (never re-enable)
-my $default_mode = 'normal';
-my $default_minpsharedkey = 0.9;
+my $default_mode = 'matchscore';
+my $default_minpsharedkmer = 0.5;
+my $default_minscore = 1;
 
 # Job management settings
 my $job_file = '.kafsssearchclient';
@@ -35,8 +36,8 @@ my $serverlist = '';
 my $database = '';  # Now optional
 my $subset = '';
 my $maxnseq = $default_maxnseq;
-my $minscore = undef;
-my $minpsharedkey = $default_minpsharedkey;
+my $minscore = $default_minscore;
+my $minpsharedkmer = $default_minpsharedkmer;
 my $numthreads = $default_numthreads;
 my $maxnretry = $default_maxnretry;
 my $maxnretry_total = $default_maxnretry_total;
@@ -60,7 +61,7 @@ GetOptions(
     'subset=s' => \$subset,
     'maxnseq=i' => \$maxnseq,
     'minscore=i' => \$minscore,
-    'minpsharedkey=f' => \$minpsharedkey,
+    'minpsharedkmer=f' => \$minpsharedkmer,
     'numthreads=i' => \$numthreads,
     'maxnretry=i' => \$maxnretry,
     'maxnretry_total=i' => \$maxnretry_total,
@@ -136,9 +137,9 @@ unless ($resume_job_id || $cancel_job_id || $show_jobs) {
     # Validate required options
     die "Either --server or --serverlist option must be specified\n" unless $server || $serverlist;
     # Database name is now optional - can be omitted if server has default
-    die "maxnseq must be positive integer\n" unless $maxnseq > 0;
+    die "maxnseq must be non-negative integer\n" unless $maxnseq >= 0;
     die "minscore must be positive integer\n" if defined $minscore && $minscore <= 0;
-    die "minpsharedkey must be between 0.0 and 1.0\n" unless $minpsharedkey >= 0.0 && $minpsharedkey <= 1.0;
+    die "minpsharedkmer must be between 0.0 and 1.0\n" unless $minpsharedkmer >= 0.0 && $minpsharedkmer <= 1.0;
     die "numthreads must be positive integer\n" unless $numthreads > 0;
     die "maxnretry must be non-negative integer\n" unless $maxnretry >= 0;
     die "maxnretry_total must be non-negative integer\n" unless $maxnretry_total >= 0;
@@ -153,7 +154,7 @@ unless ($resume_job_id || $cancel_job_id || $show_jobs) {
 # Validate mode
 my $normalized_mode = normalize_mode($mode);
 if (!$normalized_mode) {
-    die "Invalid mode: $mode. Must be 'minimum', 'normal', or 'maximum'\n";
+    die "Invalid mode: $mode. Must be 'minimum', 'matchscore', 'sequence', or 'maximum'\n";
 }
 $mode = $normalized_mode;
 
@@ -186,9 +187,9 @@ print "Server: " . ($server ? $server : 'none') . "\n";
 print "Server list file: " . ($serverlist ? $serverlist : 'none') . "\n";
 print "Database: $database\n";
 print "Subset: " . ($subset ? $subset : 'all') . "\n";
-print "Max sequences: $maxnseq\n";
-print "Min score: " . (defined $minscore ? $minscore : 'default') . "\n";
-print "Min shared key rate: $minpsharedkey\n";
+print "Max sequences: " . ($maxnseq == 0 ? "unlimited" : $maxnseq) . "\n";
+print "Min score: $minscore\n";
+print "Min shared k-mer rate: $minpsharedkmer\n";
 print "Number of threads: $numthreads\n";
 print "Mode: $mode\n";
 print "Max retries per query: $maxnretry\n";
@@ -463,8 +464,8 @@ sub process_single_sequence_client {
     # Add minscore if specified
     $job_data->{minscore} = $minscore if defined $minscore;
     
-    # Add minpsharedkey
-    $job_data->{minpsharedkey} = $minpsharedkey;
+    # Add minpsharedkmer
+    $job_data->{minpsharedkmer} = $minpsharedkmer;
     
     # Submit job to server
     my $server_url = get_next_server_url();
@@ -519,8 +520,8 @@ sub submit_search_job {
     # Add minscore if specified
     $job_data->{minscore} = $minscore if defined $minscore;
     
-    # Add minpsharedkey
-    $job_data->{minpsharedkey} = $minpsharedkey;
+    # Add minpsharedkmer
+    $job_data->{minpsharedkmer} = $minpsharedkmer;
     
     my $server_url = get_next_server_url();
     my $job_id = make_job_submission_request($server_url, $job_data);
@@ -983,11 +984,11 @@ Job management options:
 Other options:
   --db=DATABASE     PostgreSQL database name (optional if server has default)
   --subset=NAME     Limit search to specific subset (optional)
-  --maxnseq=INT     Maximum number of results per query (default: 1000)
-  --minscore=INT    Minimum score threshold (optional, uses server default if not set)
-  --minpsharedkey=REAL  Minimum percentage of shared keys (0.0-1.0, default: 0.9)
+  --maxnseq=INT     Maximum number of results per query (default: 1000, 0=unlimited)
+  --minscore=INT    Minimum score threshold (default: 1)
+  --minpsharedkmer=REAL  Minimum percentage of shared k-mers (0.0-1.0, default: 0.5)
   --numthreads=INT  Number of parallel threads (default: 1, currently unused for async)
-  --mode=MODE       Output mode: minimum, normal, maximum (default: normal)
+  --mode=MODE       Output mode: minimum, matchscore, sequence, maximum (default: matchscore)
   --maxnretry_total=INT Maximum total retries for all operations (default: 100)
   --retrydelay=INT  Retry delay in seconds (default: 10, currently unused)
   --failedserverexclusion=INT Exclude failed servers for N seconds (default: infinite, -1)
@@ -1032,9 +1033,9 @@ Output format:
   Tab-separated values with columns:
   1. Query sequence number (1-based integer)
   2. Query FASTA label
-  3. CORRECTEDSCORE from server
-  4. Comma-separated seqid list
-  5. Sequence data (only in maximum mode)
+  3. Comma-separated seqid list
+  4. Match score from server (only in matchscore and maximum modes)
+  5. Sequence data (only in sequence and maximum modes)
 
 Authentication:
   For servers protected by HTTP Basic authentication, use one of these options:
@@ -1264,7 +1265,7 @@ sub open_input_file {
         print "Using blastdbcmd for BLAST database: $filename\n" if $verbose;
         
         # BLAST nucleotide database
-        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '10000000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
+        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '1000000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
         return $fh;
     }
     
@@ -1302,7 +1303,11 @@ sub close_input_file {
     return if $filename eq '-' || $filename eq 'stdin' || $filename eq 'STDIN';
     
     # Close file handle with error checking
-    close $fh or warn "Warning: Could not close file handle for '$filename': $!\n";
+    # For BLAST databases opened with pipe, ignore ECHILD error
+    if (!close($fh)) {
+        # Only warn if it's not a "No child processes" error (ECHILD)
+        warn "Warning: Could not close file handle for '$filename': $!\n" unless $! =~ /No child processes/;
+    }
 }
 
 sub open_output_file {
@@ -1365,7 +1370,10 @@ sub normalize_mode {
         'min' => 'minimum',
         'minimize' => 'minimum',
         'minimum' => 'minimum',
-        'normal' => 'normal',
+        'matchscore' => 'matchscore',
+        'score' => 'matchscore',
+        'sequence' => 'sequence',
+        'seq' => 'sequence',
         'max' => 'maximum',
         'maximize' => 'maximum',
         'maximum' => 'maximum'

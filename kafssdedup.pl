@@ -293,7 +293,14 @@ sub deduplicate_sequences_simple {
         
         # Phase 1: Identify duplicate sequences
         print "Phase 1: Identifying duplicate sequences...\n";
-        $dbh->do("DROP TABLE IF EXISTS kafsss_data_dupseq");
+        
+        # Check if table exists before dropping
+        my $dupseq_exists = $dbh->selectrow_array(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'kafsss_data_dupseq')"
+        );
+        if ($dupseq_exists) {
+            $dbh->do("DROP TABLE kafsss_data_dupseq");
+        }
         $dbh->do(<<SQL);
 CREATE TABLE kafsss_data_dupseq AS 
 SELECT seq 
@@ -311,7 +318,14 @@ SQL
         if ($duplicate_count > 0) {
             # Phase 2: Process only duplicate data
             print "Phase 2: Processing duplicate sequences...\n";
-            $dbh->do("DROP TABLE IF EXISTS kafsss_data_dedup_temp");
+            
+            # Check if table exists before dropping
+            my $dedup_temp_exists = $dbh->selectrow_array(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'kafsss_data_dedup_temp')"
+            );
+            if ($dedup_temp_exists) {
+                $dbh->do("DROP TABLE kafsss_data_dedup_temp");
+            }
             $dbh->do(<<SQL);
 CREATE TABLE kafsss_data_dedup_temp AS
 SELECT 
@@ -432,7 +446,20 @@ SQL
     
     # Drop and recreate the aggregate function
     eval {
-        $dbh->do("DROP AGGREGATE IF EXISTS array_cat_agg(text[])");
+        # Check if aggregate exists before dropping
+        my $check_agg = $dbh->prepare(<<SQL);
+SELECT COUNT(*) FROM pg_proc p
+JOIN pg_namespace n ON p.pronamespace = n.oid
+WHERE n.nspname = 'public' AND p.proname = 'array_cat_agg'
+SQL
+        $check_agg->execute();
+        my ($agg_exists) = $check_agg->fetchrow_array();
+        $check_agg->finish();
+        
+        if ($agg_exists) {
+            $dbh->do("DROP AGGREGATE array_cat_agg(text[])");
+        }
+        
         $dbh->do(<<SQL);
 CREATE AGGREGATE array_cat_agg(text[]) (
     SFUNC = array_cat_sfunc,

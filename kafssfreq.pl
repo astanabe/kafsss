@@ -603,7 +603,7 @@ sub validate_database_schema {
     print "Validating database schema...\n";
     
     # Check if required tables exist
-    my @required_tables = ('kafsss_data_meta', 'kafsss_data');
+    my @required_tables = ('kafsss_meta', 'kafsss_data');
     
     for my $table (@required_tables) {
         my $sth = $dbh->prepare("SELECT 1 FROM information_schema.tables WHERE table_name = ?");

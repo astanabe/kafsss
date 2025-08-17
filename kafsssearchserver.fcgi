@@ -27,9 +27,9 @@ my $default_database = '';       # Set default database name here (e.g., 'mykmer
 my $default_subset = '';      # Set default subset name here (e.g., 'bacteria')
 my $default_maxnseq = 1000;      # Set default maxnseq value here
 my $maxmaxnseq = 100000;         # Maximum allowed maxnseq value
-my $default_minscore = '';       # Set default minscore value here (empty = use pg_kmersearch default)
-my $default_minpsharedkey = '';  # Set default minimum shared key rate here (empty = use pg_kmersearch default)
-my $default_mode = 'normal';     # Set default mode (minimum, normal, maximum)
+my $default_minscore = 1;        # Set default minscore value here
+my $default_minpsharedkmer = 0.5;  # Set default minimum shared k-mer rate here
+my $default_mode = 'matchscore'; # Set default mode (minimum, matchscore, maximum)
 my $default_numthreads = 5;      # Number of FastCGI processes
 
 # SQLite job management settings
@@ -183,7 +183,7 @@ Asynchronous API Usage:
     "subset": "subset_name",      // optional, uses default if configured
     "maxnseq": 1000,                   // optional, uses default if configured
     "minscore": 10,                    // optional, uses default if configured
-    "mode": "normal"                   // optional: minimum, normal, maximum
+    "mode": "matchscore"                // optional: minimum, matchscore, maximum
   }
   
   Response: {"job_id": "20250703T120000-AbCdEfGhIjKlMnOpQrStUvWxYz012345"}
@@ -206,7 +206,7 @@ Asynchronous API Usage:
     "db": "database_name",
     "results": [
       {
-        "correctedscore": 95,
+        "matchscore": 95,
         "seqid": ["AB123:1:100", "CD456:50:150"]
       }
     ]
@@ -313,8 +313,17 @@ sub handle_search_async {
         $request->{subset} ||= $default_subset;
         $request->{maxnseq} ||= $default_maxnseq;
         $request->{minscore} ||= $default_minscore;
-        $request->{minpsharedkey} ||= $default_minpsharedkey;
+        $request->{minpsharedkmer} ||= $default_minpsharedkmer;
         $request->{mode} ||= $default_mode;
+        
+        # Normalize and validate mode
+        my $normalized_mode = normalize_mode($request->{mode});
+        if (!$normalized_mode) {
+            send_error_response(400, "INVALID_REQUEST",
+                "Invalid mode: $request->{mode}. Must be 'minimum'/'min', 'matchscore'/'score', 'sequence'/'seq', or 'maximum'/'max'");
+            return;
+        }
+        $request->{mode} = $normalized_mode;
         
         # Validate values
         if ($request->{maxnseq} > $maxmaxnseq) {
@@ -323,11 +332,11 @@ sub handle_search_async {
             return;
         }
         
-        # Validate minpsharedkey if specified
-        if (defined $request->{minpsharedkey} && $request->{minpsharedkey} ne '') {
-            if ($request->{minpsharedkey} < 0.0 || $request->{minpsharedkey} > 1.0) {
+        # Validate minpsharedkmer if specified
+        if (defined $request->{minpsharedkmer} && $request->{minpsharedkmer} ne '') {
+            if ($request->{minpsharedkmer} < 0.0 || $request->{minpsharedkmer} > 1.0) {
                 send_error_response(400, "INVALID_REQUEST",
-                    "minpsharedkey value ($request->{minpsharedkey}) must be between 0.0 and 1.0");
+                    "minpsharedkmer value ($request->{minpsharedkmer}) must be between 0.0 and 1.0");
                 return;
             }
         }
@@ -586,6 +595,27 @@ sub generate_job_id {
     my $random_bytes = generate_random_bytes(24);  # 192 bits
     my $base64_subset = encode_base64($random_bytes, '');  # 32 characters, no newlines
     return "$timestamp-$base64_subset";
+}
+
+sub normalize_mode {
+    my ($mode) = @_;
+    return '' unless defined $mode;
+    
+    # Normalize mode aliases
+    my %mode_aliases = (
+        'min' => 'minimum',
+        'minimize' => 'minimum',
+        'minimum' => 'minimum',
+        'matchscore' => 'matchscore',
+        'score' => 'matchscore',
+        'sequence' => 'sequence',
+        'seq' => 'sequence',
+        'max' => 'maximum',
+        'maximize' => 'maximum',
+        'maximum' => 'maximum'
+    );
+    
+    return $mode_aliases{lc($mode)} || '';
 }
 
 sub format_timestamp {
@@ -979,9 +1009,9 @@ sub perform_database_search {
     }
     
     # Set minimum shared key rate if specified
-    if (defined $request->{minpsharedkey} && $request->{minpsharedkey} ne '') {
+    if (defined $request->{minpsharedkmer} && $request->{minpsharedkmer} ne '') {
         eval {
-            $dbh->do("SET kmersearch.min_shared_kmer_rate = $request->{minpsharedkey}");
+            $dbh->do("SET kmersearch.min_shared_kmer_rate = $request->{minpsharedkmer}");
         };
         if ($@) {
             die "Failed to set minimum shared key rate: $@";
@@ -997,36 +1027,57 @@ sub perform_database_search {
         die "Invalid query sequence: $validation_result->{reason}";
     }
     
-    # Build search query with subquery for efficient sorting
-    my $inner_sql;
-    if ($request->{mode} eq 'maximum') {
-        $inner_sql = "SELECT seq, seqid FROM kafsss_data WHERE seq =% ?";
-    } else {
-        $inner_sql = "SELECT seq, seqid FROM kafsss_data WHERE seq =% ?";
-    }
+    # Build search query
+    my $sql;
+    my @params;
     
-    my @params = ($request->{queryseq});
-    
-    # Add subset condition if specified
+    # Build WHERE clause
+    my $where_clause = "WHERE seq =% ?";
+    @params = ($request->{queryseq});
     if (defined $request->{subset} && $request->{subset} ne '') {
-        $inner_sql .= " AND ? = ANY(subset)";
+        $where_clause .= " AND ? = ANY(subset)";
         push @params, $request->{subset};
     }
     
-    # Add ORDER BY and LIMIT to inner query (use matchscore for performance)
-    $inner_sql .= " ORDER BY kmersearch_matchscore(seq, ?) DESC LIMIT ?";
-    push @params, $request->{queryseq}, $request->{maxnseq};
-    
-    # Build outer query with match score sorting
-    my $sql;
-    if ($request->{mode} eq 'maximum') {
-        $sql = "SELECT kmersearch_matchscore(seq, ?) AS score, seqid, seq FROM ($inner_sql) selected_rows ORDER BY score DESC";
+    # Build query based on mode and requirements
+    if ($request->{mode} eq 'minimum') {
+        if ($request->{maxnseq} == 0) {
+            # No limit, no score needed
+            $sql = "SELECT seqid FROM kafsss_data $where_clause";
+        } else {
+            # With limit, need score for ordering but don't output it
+            $sql = "SELECT seqid FROM kafsss_data $where_clause ORDER BY kmersearch_matchscore(seq, ?) DESC LIMIT ?";
+            push @params, $request->{queryseq}, $request->{maxnseq};
+        }
+    } elsif ($request->{mode} eq 'sequence') {
+        if ($request->{maxnseq} == 0) {
+            # No limit, no score needed
+            $sql = "SELECT seqid, seq FROM kafsss_data $where_clause";
+        } else {
+            # With limit, need score for ordering but don't output it
+            $sql = "SELECT seqid, seq FROM kafsss_data $where_clause ORDER BY kmersearch_matchscore(seq, ?) DESC LIMIT ?";
+            push @params, $request->{queryseq}, $request->{maxnseq};
+        }
+    } elsif ($request->{mode} eq 'matchscore') {
+        if ($request->{maxnseq} == 0) {
+            $sql = "SELECT seqid, kmersearch_matchscore(seq, ?) AS score FROM kafsss_data $where_clause ORDER BY score DESC";
+            unshift @params, $request->{queryseq};
+        } else {
+            $sql = "SELECT seqid, kmersearch_matchscore(seq, ?) AS score FROM kafsss_data $where_clause ORDER BY score DESC LIMIT ?";
+            unshift @params, $request->{queryseq};
+            push @params, $request->{maxnseq};
+        }
     } else {
-        $sql = "SELECT kmersearch_matchscore(seq, ?) AS score, seqid FROM ($inner_sql) selected_rows ORDER BY score DESC";
+        # maximum mode
+        if ($request->{maxnseq} == 0) {
+            $sql = "SELECT seqid, kmersearch_matchscore(seq, ?) AS score, seq FROM kafsss_data $where_clause ORDER BY score DESC";
+            unshift @params, $request->{queryseq};
+        } else {
+            $sql = "SELECT seqid, kmersearch_matchscore(seq, ?) AS score, seq FROM kafsss_data $where_clause ORDER BY score DESC LIMIT ?";
+            unshift @params, $request->{queryseq};
+            push @params, $request->{maxnseq};
+        }
     }
-    
-    # Add parameters for outer query
-    unshift @params, $request->{queryseq};
     
     my @results = ();
     
@@ -1035,24 +1086,44 @@ sub perform_database_search {
         $sth->execute(@params);
         
         if ($request->{mode} eq 'maximum') {
-            while (my ($score, $seqid_array, $seq) = $sth->fetchrow_array()) {
+            while (my ($seqid_array, $score, $seq) = $sth->fetchrow_array()) {
                 # Parse PostgreSQL array and extract seqid
                 my $seqid_str = extract_seqid_string($seqid_array);
                 
                 push @results, {
-                    correctedscore => $score,
+                    seqid => [split(/,/, $seqid_str)],
+                    matchscore => $score,
+                    seq => $seq
+                };
+            }
+        } elsif ($request->{mode} eq 'minimum') {
+            while (my ($seqid_array) = $sth->fetchrow_array()) {
+                # Parse PostgreSQL array and extract seqid
+                my $seqid_str = extract_seqid_string($seqid_array);
+                
+                push @results, {
+                    seqid => [split(/,/, $seqid_str)]
+                };
+            }
+        } elsif ($request->{mode} eq 'sequence') {
+            while (my ($seqid_array, $seq) = $sth->fetchrow_array()) {
+                # Parse PostgreSQL array and extract seqid
+                my $seqid_str = extract_seqid_string($seqid_array);
+                
+                push @results, {
                     seqid => [split(/,/, $seqid_str)],
                     seq => $seq
                 };
             }
         } else {
-            while (my ($score, $seqid_array) = $sth->fetchrow_array()) {
+            # matchscore mode
+            while (my ($seqid_array, $score) = $sth->fetchrow_array()) {
                 # Parse PostgreSQL array and extract seqid
                 my $seqid_str = extract_seqid_string($seqid_array);
                 
                 push @results, {
-                    correctedscore => $score,
-                    seqid => [split(/,/, $seqid_str)]
+                    seqid => [split(/,/, $seqid_str)],
+                    matchscore => $score
                 };
             }
         }
@@ -1314,7 +1385,10 @@ sub normalize_mode {
         'min' => 'minimum',
         'minimize' => 'minimum',
         'minimum' => 'minimum',
-        'normal' => 'normal',
+        'matchscore' => 'matchscore',
+        'score' => 'matchscore',
+        'sequence' => 'sequence',
+        'seq' => 'sequence',
         'max' => 'maximum',
         'maximize' => 'maximum',
         'maximum' => 'maximum'

@@ -36,6 +36,15 @@ perl check_dependencies.pl
 # Store sequences in database
 kafssstore sequences.fasta mydb
 
+# Optional: deduplicate sequences
+kafssdedup mydb
+
+# Optional: partition table for performance
+kafsspart --npart=16 mydb
+
+# Perform k-mer frequency analysis
+kafssfreq --mode=create mydb
+
 # Create search indexes  
 kafssindex --mode=create mydb
 

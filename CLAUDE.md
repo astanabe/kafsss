@@ -93,15 +93,15 @@ The typical kafsss workflow is as follows:
 
 ### Command-Line Tools
 - `kafssstore` - Store multi-FASTA sequences in PostgreSQL database
-- `kafssindex` - Create and manage k-mer search indexes 
-- `kafsssearch` - Local sequence similarity search
-- `kafsssearchclient` - Remote API client with job management
+- `kafssdedup` - Sequence deduplication tool (merge identical sequences)
+- `kafsspart` - Partition kafsss_data table using pg_kmersearch's partition function
+- `kafssfreq` - K-mer frequency analysis tool (stores high-frequency k-mers in system tables)
+- `kafssindex` - Create and manage k-mer search indexes (GIN index with k-mers as keys)
+- `kafsspreload` - Preload high-frequency k-mer cache into memory for acceleration
 - `kafsssubset` - Database subset management utilities (add/remove subset labels)
 - `kafssdbinfo` - Database information and statistics
-- `kafssdedup` - Sequence deduplication tool
-- `kafsspart` - Partition kafsss_data table using pg_kmersearch's partition function
-- `kafssfreq` - K-mer frequency analysis tool
-- `calcsegment` - Sequence segmentation calculations (utility planned)
+- `kafsssearch` - Local sequence similarity search
+- `kafsssearchclient` - Remote API client with asynchronous job management
 
 ### Server Components
 - `kafsssearchserver.pl` - Standalone HTTP server
@@ -183,6 +183,9 @@ cpanm DBI DBD::Pg DBD::SQLite JSON LWP::UserAgent HTTP::Request::Common \
 ```bash
 # Basic workflow test (ensure database setup is complete first)
 kafssstore sampledata.fasta testdb
+kafssdedup testdb  # Optional: deduplicate sequences
+kafsspart --npart=16 testdb  # Optional: partition table for performance
+kafssfreq --mode=create testdb
 kafssindex --mode=create testdb
 kafsssearch --db=testdb sampledata.fasta results.tsv
 
@@ -227,8 +230,16 @@ grep -n "pg_kmersearch" *.pl
 - API endpoints: `/search`, `/result`, `/status`, `/cancel`, `/metadata` (GET)
 
 ### Performance Parameters
-- K-mer size: Default 8, configurable via `--kmer_size` in kafssindex
-- Search modes: minimum, normal, maximum (affects sensitivity/speed) in kafsssearch
+- K-mer size: Default 8, configurable via `--kmersize` in kafssfreq and kafssindex
+- Search modes in kafsssearch:
+  - `minimum` (alias: `min`) - No score calculation, fastest
+  - `matchscore` (alias: `score`) - Calculate match scores (default)
+  - `sequence` (alias: `seq`) - Include sequence data, no score
+  - `maximum` (alias: `max`) - All columns including score and sequence
+- Search parameters:
+  - `--maxnseq`: Maximum results per query (default: 1000, 0=unlimited)
+  - `--minscore`: Minimum score threshold (default: 1)
+  - `--minpsharedkmer`: Minimum shared k-mer rate (default: 0.5, range: 0.0-1.0)
 - Thread counts: Configurable for parallel processing (`--numthreads`)
 - Memory settings: Working memory for index operations (`--workingmemory`)
 - Compression: Database compression options (lz4, pglz, disable) in kafssstore

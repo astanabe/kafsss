@@ -80,6 +80,29 @@ if ($relkind eq 'p') {
     die "Error: Table 'kafsss_data' is already partitioned\n";
 }
 
+# Check if GIN indexes exist on seq column of kafsss_data table
+my $check_gin_index_sql = "
+    SELECT i.indexname
+    FROM pg_indexes i
+    JOIN pg_class c ON c.relname = i.indexname
+    JOIN pg_index idx ON idx.indexrelid = c.oid
+    JOIN pg_attribute a ON a.attrelid = idx.indrelid AND a.attnum = ANY(idx.indkey)
+    WHERE i.tablename = 'kafsss_data'
+    AND a.attname = 'seq'
+    AND i.indexdef LIKE '%USING gin%'
+    LIMIT 1
+";
+my $gin_index_name = $dbh->selectrow_array($check_gin_index_sql);
+
+if ($gin_index_name) {
+    die "Error: GIN index '$gin_index_name' exists on kafsss_data.seq column.\n" .
+        "Partitioning cannot proceed with existing GIN indexes.\n" .
+        "Please remove GIN indexes first using:\n" .
+        "  kafssindex --mode=drop $database_name\n" .
+        "After partitioning, recreate indexes with:\n" .
+        "  kafssindex --mode=create $database_name\n";
+}
+
 # Prepare tablespace parameter (NULL if not specified)
 my $tablespace_param = $tablespace ? "'$tablespace'" : 'NULL';
 

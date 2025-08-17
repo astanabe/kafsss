@@ -591,7 +591,11 @@ sub process_fasta_file {
     
     # Close file handle unless it's STDIN
     unless ($filename eq '-' || $filename eq 'stdin' || $filename eq 'STDIN') {
-        close $fh or warn "Warning: Could not close file handle for '$filename': $!\n";
+        # For BLAST databases opened with pipe, ignore ECHILD error
+        if (!close($fh)) {
+            # Only warn if it's not a "No child processes" error (ECHILD)
+            warn "Warning: Could not close file handle for '$filename': $!\n" unless $! =~ /No child processes/;
+        }
     }
     
     return $sequence_count;
@@ -1350,7 +1354,7 @@ sub open_input_file {
         print "Using blastdbcmd for BLAST database: $filename\n" if $verbose;
         
         # BLAST nucleotide database
-        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '10000000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
+        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '1000000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
         return $fh;
     }
     

@@ -19,8 +19,9 @@ my $default_port = $ENV{PGPORT} || 5432;
 my $default_user = $ENV{PGUSER} || getpwuid($<);
 my $default_maxnseq = 1000;
 my $default_numthreads = 1;
-my $default_mode = 'normal';
-my $default_minpsharedkey = 0.9;
+my $default_mode = 'matchscore';
+my $default_minpsharedkmer = 0.5;
+my $default_minscore = 1;
 
 # Command line options
 my $host = $default_host;
@@ -29,8 +30,8 @@ my $username = $default_user;
 my $database = '';
 my $subset = '';
 my $maxnseq = $default_maxnseq;
-my $minscore = undef;
-my $minpsharedkey = $default_minpsharedkey;
+my $minscore = $default_minscore;
+my $minpsharedkmer = $default_minpsharedkmer;
 my $numthreads = $default_numthreads;
 my $mode = $default_mode;
 my $verbose = 0;
@@ -45,7 +46,7 @@ GetOptions(
     'subset=s' => \$subset,
     'maxnseq=i' => \$maxnseq,
     'minscore=i' => \$minscore,
-    'minpsharedkey=f' => \$minpsharedkey,
+    'minpsharedkmer=f' => \$minpsharedkmer,
     'numthreads=i' => \$numthreads,
     'mode=s' => \$mode,
     'verbose|v' => \$verbose,
@@ -77,15 +78,15 @@ if (@input_files == 0) {
 
 # Validate required options
 die "Database name must be specified with --db option\n" unless $database;
-die "maxnseq must be positive integer\n" unless $maxnseq > 0;
+die "maxnseq must be non-negative integer\n" unless $maxnseq >= 0;
 die "minscore must be positive integer\n" if defined $minscore && $minscore <= 0;
-die "minpsharedkey must be between 0.0 and 1.0\n" unless $minpsharedkey >= 0.0 && $minpsharedkey <= 1.0;
+die "minpsharedkmer must be between 0.0 and 1.0\n" unless $minpsharedkmer >= 0.0 && $minpsharedkmer <= 1.0;
 die "numthreads must be positive integer\n" unless $numthreads > 0;
 
 # Validate mode
 my $normalized_mode = normalize_mode($mode);
 if (!$normalized_mode) {
-    die "Invalid mode: $mode. Must be 'minimum', 'normal', or 'maximum'\n";
+    die "Invalid mode: $mode. Must be 'minimum', 'matchscore', 'sequence', or 'maximum'\n";
 }
 $mode = $normalized_mode;
 
@@ -100,9 +101,9 @@ print "Host: $host\n";
 print "Port: $port\n";
 print "Username: $username\n";
 print "Subset: " . ($subset ? $subset : 'all') . "\n";
-print "Max sequences: $maxnseq\n";
-print "Min score: " . (defined $minscore ? $minscore : 'default') . "\n";
-print "Min shared key rate: $minpsharedkey\n";
+print "Max sequences: " . ($maxnseq == 0 ? "unlimited" : $maxnseq) . "\n";
+print "Min score: $minscore\n";
+print "Min shared k-mer rate: $minpsharedkmer\n";
 print "Number of threads: $numthreads\n";
 print "Mode: $mode\n";
 
@@ -205,14 +206,14 @@ if (defined $minscore) {
     }
 }
 
-# Set minimum shared key rate
-print "Setting minimum shared key rate to $minpsharedkey...\n";
+# Set minimum shared k-mer rate
+print "Setting minimum shared k-mer rate to $minpsharedkmer...\n";
 eval {
-    $dbh->do("SET kmersearch.min_shared_kmer_rate = $minpsharedkey");
-    print "Minimum shared key rate set to $minpsharedkey successfully.\n";
+    $dbh->do("SET kmersearch.min_shared_kmer_rate = $minpsharedkmer");
+    print "Minimum shared k-mer rate set to $minpsharedkmer successfully.\n";
 };
 if ($@) {
-    die "Failed to set minimum shared key rate: $@\n";
+    die "Failed to set minimum shared k-mer rate: $@\n";
 }
 
 # Parent process disconnects from database after metadata retrieval (child processes will reconnect)
@@ -276,7 +277,7 @@ kafsssearch version $VERSION
 
 Usage: kafsssearch [options] input_file(s) output_file
 
-Search DNA sequences from multiple sources against kafsssearch database using k-mer similarity.
+Search DNA sequences from multiple sources against kafsss database using k-mer similarity.
 
 Required arguments:
   input_file(s)     Input FASTA file(s), patterns, or databases:
@@ -295,11 +296,11 @@ Other options:
   --port=PORT       PostgreSQL server port (default: \$PGPORT or 5432)
   --username=USER   PostgreSQL username (default: \$PGUSER or current user)
   --subset=NAME     Limit search to specific subset (optional)
-  --maxnseq=INT     Maximum number of results per query (default: 1000)
-  --minscore=INT    Minimum score threshold (optional, uses kmersearch.min_score GUC variable)
-  --minpsharedkey=REAL  Minimum percentage of shared keys (0.0-1.0, default: 0.9)
+  --maxnseq=INT     Maximum number of results per query (default: 1000, 0=unlimited)
+  --minscore=INT    Minimum score threshold (default: 1)
+  --minpsharedkmer=REAL  Minimum percentage of shared k-mers (0.0-1.0, default: 0.5)
   --numthreads=INT  Number of parallel threads (default: 1)
-  --mode=MODE       Output mode: minimum, normal, maximum (default: normal)
+  --mode=MODE       Output mode: minimum, matchscore, sequence, maximum (default: matchscore)
   --verbose, -v     Show detailed processing messages (default: false)
   --help, -h        Show this help message
 
@@ -313,9 +314,9 @@ Output format:
   Tab-separated values with columns:
   1. Query sequence number (1-based integer)
   2. Query FASTA label
-  3. Match score from kmersearch_matchscore function
-  4. Comma-separated seqid list from seqid column
-  5. Sequence data (only in maximum mode)
+  3. Comma-separated seqid list from seqid column
+  4. Match score from kmersearch_matchscore function (only in matchscore and maximum modes)
+  5. Sequence data (only in sequence and maximum modes)
 
 Examples:
   # Single file
@@ -362,7 +363,7 @@ sub verify_database_structure {
     die "pg_kmersearch extension is not installed in database '$database'\n" 
         unless $ext_exists;
     
-    # Check if kafsssearch table exists
+    # Check if kafsss_data table exists
     $sth = $dbh->prepare(<<SQL);
 SELECT COUNT(*)
 FROM information_schema.tables 
@@ -401,7 +402,7 @@ sub open_input_file {
         print "Using blastdbcmd for BLAST database: $filename\n" if $verbose;
         
         # BLAST nucleotide database
-        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '10000000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
+        open my $fh, '-|', 'blastdbcmd', '-db', $filename, '-dbtype', 'nucl', '-entry', 'all', '-out', '-', '-outfmt', ">\%a\n\%s", '-line_length', '1000000000', '-ctrl_a', '-get_dups' or die "Cannot open BLAST database '$filename': $!\n";
         return $fh;
     }
     
@@ -439,7 +440,11 @@ sub close_input_file {
     return if $filename eq '-' || $filename eq 'stdin' || $filename eq 'STDIN';
     
     # Close file handle with error checking
-    close $fh or warn "Warning: Could not close file handle for '$filename': $!\n";
+    # For BLAST databases opened with pipe, ignore ECHILD error
+    if (!close($fh)) {
+        # Only warn if it's not a "No child processes" error (ECHILD)
+        warn "Warning: Could not close file handle for '$filename': $!\n" unless $! =~ /No child processes/;
+    }
 }
 
 sub open_output_file {
@@ -748,12 +753,12 @@ sub process_single_sequence {
         }
     }
     
-    # Set minimum shared key rate
+    # Set minimum shared k-mer rate
     eval {
-        $child_dbh->do("SET kmersearch.min_shared_kmer_rate = $minpsharedkey");
+        $child_dbh->do("SET kmersearch.min_shared_kmer_rate = $minpsharedkmer");
     };
     if ($@) {
-        die "Failed to set minimum shared key rate in child process: $@\n";
+        die "Failed to set minimum shared k-mer rate in child process: $@\n";
     }
     
     # Search sequence (using metadata from parent, no need to retrieve again)
@@ -787,57 +792,57 @@ sub search_sequence_with_validation {
         return [];  # Return empty results
     }
     
-    # Build search query with subquery for efficient sorting
-    my $inner_sql;
-    if ($search_mode eq 'maximum') {
-        $inner_sql = <<SQL;
-SELECT seq, seqid
-FROM kafsssearch
-WHERE seq =% ?
-SQL
-    } else {
-        $inner_sql = <<SQL;
-SELECT seq, seqid
-FROM kafsssearch
-WHERE seq =% ?
-SQL
-    }
-
-    my @params = ($sequence);
+    # Build search query
+    my $sql;
+    my @params;
     
-    # Add subset condition if specified
+    # Build WHERE clause
+    my $where_clause = "WHERE seq =% ?";
+    @params = ($sequence);
     if ($subset) {
-        $inner_sql .= " AND ? = ANY(subset)";
+        $where_clause .= " AND ? = ANY(subset)";
         push @params, $subset;
     }
     
-    # Add ORDER BY and LIMIT to inner query (use matchscore for performance)
-    $inner_sql .= " ORDER BY kmersearch_matchscore(seq, ?) DESC LIMIT ?";
-    push @params, $sequence, $maxnseq;
-    
-    # Build outer query with match score sorting
-    my $sql;
-    if ($search_mode eq 'maximum') {
-        $sql = <<SQL;
-SELECT 
-    kmersearch_matchscore(seq, ?) AS score,
-    seqid,
-    seq
-FROM ($inner_sql) selected_rows
-ORDER BY score DESC
-SQL
+    # Build query based on mode and requirements
+    if ($search_mode eq 'minimum') {
+        if ($maxnseq == 0) {
+            # No limit, no score needed
+            $sql = "SELECT seqid FROM kafsss_data $where_clause";
+        } else {
+            # With limit, need score for ordering but don't output it
+            $sql = "SELECT seqid FROM kafsss_data $where_clause ORDER BY kmersearch_matchscore(seq, ?) DESC LIMIT ?";
+            push @params, $sequence, $maxnseq;
+        }
+    } elsif ($search_mode eq 'sequence') {
+        if ($maxnseq == 0) {
+            # No limit, no score needed
+            $sql = "SELECT seqid, seq FROM kafsss_data $where_clause";
+        } else {
+            # With limit, need score for ordering but don't output it
+            $sql = "SELECT seqid, seq FROM kafsss_data $where_clause ORDER BY kmersearch_matchscore(seq, ?) DESC LIMIT ?";
+            push @params, $sequence, $maxnseq;
+        }
+    } elsif ($search_mode eq 'matchscore') {
+        if ($maxnseq == 0) {
+            $sql = "SELECT seqid, kmersearch_matchscore(seq, ?) AS score FROM kafsss_data $where_clause ORDER BY score DESC";
+            unshift @params, $sequence;
+        } else {
+            $sql = "SELECT seqid, kmersearch_matchscore(seq, ?) AS score FROM kafsss_data $where_clause ORDER BY score DESC LIMIT ?";
+            unshift @params, $sequence;
+            push @params, $maxnseq;
+        }
     } else {
-        $sql = <<SQL;
-SELECT 
-    kmersearch_matchscore(seq, ?) AS score,
-    seqid
-FROM ($inner_sql) selected_rows
-ORDER BY score DESC
-SQL
+        # maximum mode
+        if ($maxnseq == 0) {
+            $sql = "SELECT seqid, kmersearch_matchscore(seq, ?) AS score, seq FROM kafsss_data $where_clause ORDER BY score DESC";
+            unshift @params, $sequence;
+        } else {
+            $sql = "SELECT seqid, kmersearch_matchscore(seq, ?) AS score, seq FROM kafsss_data $where_clause ORDER BY score DESC LIMIT ?";
+            unshift @params, $sequence;
+            push @params, $maxnseq;
+        }
     }
-
-    # Add parameters for outer query
-    unshift @params, $sequence;
     
     my @results = ();
     
@@ -846,18 +851,33 @@ SQL
         $sth->execute(@params);
         
         if ($search_mode eq 'maximum') {
-            while (my ($score, $seqid_array, $seq) = $sth->fetchrow_array()) {
+            while (my ($seqid_array, $score, $seq) = $sth->fetchrow_array()) {
                 # Parse PostgreSQL array and extract seqid
                 my $seqid_str = extract_seqid_string($seqid_array);
                 
-                push @results, [$query_number, $label, $score, $seqid_str, $seq];
+                push @results, [$query_number, $label, $seqid_str, $score, $seq];
+            }
+        } elsif ($search_mode eq 'minimum') {
+            while (my ($seqid_array) = $sth->fetchrow_array()) {
+                # Parse PostgreSQL array and extract seqid
+                my $seqid_str = extract_seqid_string($seqid_array);
+                
+                push @results, [$query_number, $label, $seqid_str];
+            }
+        } elsif ($search_mode eq 'sequence') {
+            while (my ($seqid_array, $seq) = $sth->fetchrow_array()) {
+                # Parse PostgreSQL array and extract seqid
+                my $seqid_str = extract_seqid_string($seqid_array);
+                
+                push @results, [$query_number, $label, $seqid_str, $seq];
             }
         } else {
-            while (my ($score, $seqid_array) = $sth->fetchrow_array()) {
+            # matchscore mode
+            while (my ($seqid_array, $score) = $sth->fetchrow_array()) {
                 # Parse PostgreSQL array and extract seqid
                 my $seqid_str = extract_seqid_string($seqid_array);
                 
-                push @results, [$query_number, $label, $score, $seqid_str];
+                push @results, [$query_number, $label, $seqid_str, $score];
             }
         }
         
@@ -1082,7 +1102,10 @@ sub normalize_mode {
         'min' => 'minimum',
         'minimize' => 'minimum',
         'minimum' => 'minimum',
-        'normal' => 'normal',
+        'matchscore' => 'matchscore',
+        'score' => 'matchscore',
+        'sequence' => 'sequence',
+        'seq' => 'sequence',
         'max' => 'maximum',
         'maximize' => 'maximum',
         'maximum' => 'maximum'
@@ -1225,7 +1248,7 @@ sub validate_database_schema {
     }
     
     # Check if database has k-mer indexes
-    my $sth = $dbh->prepare("SELECT 1 FROM pg_indexes WHERE tablename = 'kafsssearch' AND indexname LIKE '%_kmer_%' LIMIT 1");
+    my $sth = $dbh->prepare("SELECT 1 FROM pg_indexes WHERE tablename = 'kafsss_data' AND indexname LIKE '%_kmer_%' LIMIT 1");
     $sth->execute();
     my $has_kmer_index = $sth->fetchrow_array();
     $sth->finish();
