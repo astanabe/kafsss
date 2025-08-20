@@ -16,13 +16,13 @@ use File::Temp qw(tempfile);
 my $VERSION = "1.0.0";
 
 # Default values
-my $default_maxnseq = 1000;
+my $default_maxnseq = 0;
 my $default_numthreads = 1;
 my $default_maxnretry = 0;  # 0 means unlimited
 my $default_maxnretry_total = 100;
 my $default_retrydelay = 10;
 my $default_failedserverexclusion = -1;  # -1 means infinite (never re-enable)
-my $default_mode = 'matchscore';
+my $default_mode = 'sequence';
 my $default_minpsharedkmer = 0.5;
 my $default_minscore = 1;
 

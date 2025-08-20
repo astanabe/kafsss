@@ -125,8 +125,11 @@ sub initialize_sqlite_database {
     my ($sqlite_path) = @_;
     
     my $dbh = DBI->connect("dbi:SQLite:dbname=$sqlite_path", "", "", {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     }) or die "Cannot connect to SQLite database '$sqlite_path': $DBI::errstr\n";
     
@@ -743,8 +746,11 @@ sub get_current_job_count {
     my ($self) = @_;
     
     my $dbh = DBI->connect("dbi:SQLite:dbname=" . $self->{sqlite_path}, "", "", {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     });
     
@@ -761,8 +767,11 @@ sub create_job {
     my ($self, $job_id, $request) = @_;
     
     my $dbh = DBI->connect("dbi:SQLite:dbname=" . $self->{sqlite_path}, "", "", {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     });
     
@@ -804,8 +813,11 @@ sub start_background_job {
     } else {
         # Parent process - update job with PID
         my $dbh = DBI->connect("dbi:SQLite:dbname=" . $self->{sqlite_path}, "", "", {
-            RaiseError => 1,
             AutoCommit => 1,
+            PrintError => 0,
+            RaiseError => 1,
+            ShowErrorStatement => 1,
+            AutoInactiveDestroy => 1,
             sqlite_unicode => 1
         });
         
@@ -825,8 +837,11 @@ sub execute_search_job {
         my $dsn = "DBI:Pg:dbname=$request->{db};host=" . $self->{config}->{host} . ";port=" . $self->{config}->{port};
                 
         my $pg_dbh = DBI->connect($dsn, $self->{config}->{username}, $password, {
-            RaiseError => 1,
             AutoCommit => 1,
+            PrintError => 0,
+            RaiseError => 1,
+            ShowErrorStatement => 1,
+            AutoInactiveDestroy => 1,
             pg_enable_utf8 => 1
         });
         
@@ -867,8 +882,11 @@ sub get_job_result {
     my ($self, $job_id) = @_;
     
     my $dbh = DBI->connect("dbi:SQLite:dbname=" . $self->{sqlite_path}, "", "", {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     });
     
@@ -885,8 +903,11 @@ sub delete_job_result {
     my ($self, $job_id) = @_;
     
     my $dbh = DBI->connect("dbi:SQLite:dbname=" . $self->{sqlite_path}, "", "", {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     });
     
@@ -898,8 +919,11 @@ sub is_job_running {
     my ($self, $job_id) = @_;
     
     my $dbh = DBI->connect("dbi:SQLite:dbname=" . $self->{sqlite_path}, "", "", {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     });
     
@@ -916,8 +940,11 @@ sub cancel_job {
     my ($self, $job_id) = @_;
     
     my $dbh = DBI->connect("dbi:SQLite:dbname=" . $self->{sqlite_path}, "", "", {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     });
     
@@ -947,8 +974,11 @@ sub delete_job {
     my ($self, $job_id) = @_;
     
     my $dbh = DBI->connect("dbi:SQLite:dbname=" . $self->{sqlite_path}, "", "", {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     });
     
@@ -960,8 +990,11 @@ sub store_job_result {
     my ($self, $job_id, $result) = @_;
     
     my $dbh = DBI->connect("dbi:SQLite:dbname=" . $self->{sqlite_path}, "", "", {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     });
     
@@ -980,8 +1013,11 @@ sub recover_existing_jobs {
     my ($self) = @_;
     
     my $dbh = DBI->connect("dbi:SQLite:dbname=" . $self->{sqlite_path}, "", "", {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     });
     
@@ -1033,8 +1069,11 @@ sub cleanup_old_results {
     my ($self) = @_;
     
     my $dbh = DBI->connect("dbi:SQLite:dbname=" . $self->{sqlite_path}, "", "", {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     });
     
@@ -1052,8 +1091,11 @@ sub cleanup_timeout_jobs {
     my ($self) = @_;
     
     my $dbh = DBI->connect("dbi:SQLite:dbname=" . $self->{sqlite_path}, "", "", {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     });
     

@@ -55,9 +55,11 @@ if ($npart < 2) {
 # Connect to PostgreSQL database
 my $dsn = "dbi:Pg:dbname=$database_name;host=$host;port=$port";
 my $dbh = DBI->connect($dsn, $username, '', {
-    RaiseError => 1,
     AutoCommit => 1,
     PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1
 }) or die "Failed to connect to database: $DBI::errstr\n";
 
 # Check if kafsss_data table exists

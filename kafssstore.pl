@@ -142,8 +142,11 @@ my $password = $ENV{PGPASSWORD} || '';
 my $dsn = "DBI:Pg:host=$host;port=$port";
 
 my $dbh = DBI->connect($dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to PostgreSQL server: $DBI::errstr\n";
 
@@ -193,8 +196,11 @@ $dbh->disconnect();
 $dsn = "DBI:Pg:dbname=$output_db;host=$host;port=$port";
 
 $dbh = DBI->connect($dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to database '$output_db': $DBI::errstr\n";
 
@@ -243,8 +249,11 @@ print "Total sequences processed: $total_sequences\n";
 # Reconnect main process for statistics update
 print "Reconnecting main process for statistics update...\n" if $verbose;
 $dbh = DBI->connect($dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot reconnect to database '$output_db': $DBI::errstr\n";
 
@@ -372,8 +381,11 @@ sub validate_existing_database {
     my $password = $ENV{PGPASSWORD} || '';
     
     my $temp_dbh = DBI->connect($temp_dsn, $username, $password, {
-        RaiseError => 0,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 0,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         pg_enable_utf8 => 1
     });
     
@@ -716,8 +728,11 @@ sub start_child_process {
         my $password = $ENV{PGPASSWORD} || '';
         
         my $child_dbh = DBI->connect($child_dsn, $username, $password, {
-            RaiseError => 1,
             AutoCommit => 1,
+            PrintError => 0,
+            RaiseError => 1,
+            ShowErrorStatement => 1,
+            AutoInactiveDestroy => 1,
             pg_enable_utf8 => 1
         }) or die "Cannot connect to database in child process: $DBI::errstr\n";
         

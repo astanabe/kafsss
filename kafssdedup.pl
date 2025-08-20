@@ -24,6 +24,7 @@ my $username = $default_user;
 my $workingmemory = '8GB';
 my $maintenanceworkingmemory = '8GB';
 my $temporarybuffer = '512MB';
+my $tablespace = '';
 my $verbose = 0;
 my $help = 0;
 
@@ -35,6 +36,7 @@ GetOptions(
     'workingmemory=s' => \$workingmemory,
     'maintenanceworkingmemory=s' => \$maintenanceworkingmemory,
     'temporarybuffer=s' => \$temporarybuffer,
+    'tablespace=s' => \$tablespace,
     'verbose|v' => \$verbose,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
@@ -61,14 +63,18 @@ print "Username: $username\n";
 print "Working memory: $workingmemory\n";
 print "Maintenance working memory: $maintenanceworkingmemory\n";
 print "Temporary buffer: $temporarybuffer\n";
+print "Tablespace: " . ($tablespace ? $tablespace : "(default)") . "\n" if $verbose;
 
 # Connect to PostgreSQL server first for validation
 my $password = $ENV{PGPASSWORD} || '';
 my $server_dsn = "DBI:Pg:host=$host;port=$port";
 
 my $server_dbh = DBI->connect($server_dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to PostgreSQL server: $DBI::errstr\n";
 
@@ -84,8 +90,11 @@ $server_dbh->disconnect();
 my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
 
 my $dbh = DBI->connect($dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
 
@@ -141,7 +150,7 @@ create_custom_aggregate_functions($dbh);
 
 # Run deduplication
 print "Starting deduplication process...\n";
-my $duplicate_count = deduplicate_sequences_simple($dbh);
+my $duplicate_count = deduplicate_sequences_simple($dbh, $tablespace);
 
 # Verify table exists after deduplication
 ensure_table_exists($dbh, 'kafsss_data');
@@ -185,6 +194,7 @@ Options:
   --workingmemory=SIZE             Working memory for deduplication (default: 8GB)
   --maintenanceworkingmemory=SIZE  Maintenance working memory (default: 8GB)
   --temporarybuffer=SIZE           Temporary buffer size (default: 512MB)
+  --tablespace=NAME                Target tablespace for new tables (default: database default)
   --verbose, -v                    Show detailed processing messages (default: false)
   --help, -h                       Show this help message
 
@@ -202,6 +212,9 @@ Examples:
   kafssdedup --workingmemory=32GB mydb
   kafssdedup --workingmemory=64GB --maintenanceworkingmemory=16GB mydb
   kafssdedup --workingmemory=32GB --temporarybuffer=1GB mydb
+  
+  # With tablespace specification
+  kafssdedup --tablespace=fast_ssd mydb
   
   # With remote database
   kafssdedup --host=dbserver --username=myuser mydb
@@ -281,7 +294,7 @@ sub validate_and_set_working_memory {
 }
 
 sub deduplicate_sequences_simple {
-    my ($dbh) = @_;
+    my ($dbh, $tablespace) = @_;
     
     print "Starting non-parallel deduplication...\n" if $verbose;
     
@@ -301,8 +314,10 @@ sub deduplicate_sequences_simple {
         if ($dupseq_exists) {
             $dbh->do("DROP TABLE kafsss_data_dupseq");
         }
+        
+        my $tablespace_clause = $tablespace ? " TABLESPACE $tablespace" : "";
         $dbh->do(<<SQL);
-CREATE TABLE kafsss_data_dupseq AS 
+CREATE TABLE kafsss_data_dupseq$tablespace_clause AS 
 SELECT seq 
 FROM kafsss_data 
 GROUP BY seq 
@@ -326,8 +341,10 @@ SQL
             if ($dedup_temp_exists) {
                 $dbh->do("DROP TABLE kafsss_data_dedup_temp");
             }
+            
+            my $tablespace_clause = $tablespace ? " TABLESPACE $tablespace" : "";
             $dbh->do(<<SQL);
-CREATE TABLE kafsss_data_dedup_temp AS
+CREATE TABLE kafsss_data_dedup_temp$tablespace_clause AS
 SELECT 
     a.seq,
     array_uniq(array_cat_agg(a.subset)) as subset,

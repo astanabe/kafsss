@@ -57,8 +57,11 @@ my $password = $ENV{PGPASSWORD} || '';
 my $server_dsn = "DBI:Pg:dbname=postgres;host=$host;port=$port";
 
 my $server_dbh = DBI->connect($server_dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to PostgreSQL server: $DBI::errstr\n";
 
@@ -71,8 +74,11 @@ $server_dbh->disconnect();
 my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
 
 my $dbh = DBI->connect($dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
 

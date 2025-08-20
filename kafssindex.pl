@@ -90,8 +90,11 @@ my $password = $ENV{PGPASSWORD} || '';
 my $server_dsn = "DBI:Pg:host=$host;port=$port";
 
 my $server_dbh = DBI->connect($server_dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to PostgreSQL server: $DBI::errstr\n";
 
@@ -110,8 +113,11 @@ $server_dbh->disconnect();
 # Connect to target database
 my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
 my $dbh = DBI->connect($dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
 
@@ -388,12 +394,32 @@ SQL
         { name => 'seq', op_class => $op_class, type => 'gin' }
     );
     
+    # Disconnect from database before forking
+    $dbh->disconnect();
+    print "Parent process disconnected from database before forking.\n";
+    
     for my $column (@columns) {
         print "\nCreating indexes on column '$column->{name}' for all partitions...\n";
         create_partition_indexes_for_column(\@partitions, $num_workers, $column, 
                                             $tablespace, $pg_version, $use_highfreq_cache);
         print "Completed indexes on column '$column->{name}' for all partitions.\n";
     }
+    
+    # Reconnect to database after all child processes are done
+    print "\nReconnecting to database for parent table index creation...\n";
+    my $password = $ENV{PGPASSWORD} || '';
+    my $parent_dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
+    $dbh = DBI->connect($parent_dsn, $username, $password, {
+        AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
+        pg_enable_utf8 => 1
+    }) or die "Cannot reconnect to database '$database_name': $DBI::errstr\n";
+    
+    # Re-set GUC variables after reconnection
+    set_guc_variables($dbh);
     
     # Create indexes on parent table
     print "\nCreating indexes on parent table 'kafsss_data'...\n";
@@ -857,16 +883,24 @@ sub update_meta_table {
     
     print "Updating kafsss_meta table...\n";
     
+    # Check if kafsss_meta table has rows, insert if empty
     eval {
-        my $update_sth = $dbh->prepare(<<SQL);
-UPDATE kafsss_meta SET 
-    kmer_size = ?, 
-    max_appearance_rate = ?, 
-    max_appearance_nrow = ?, 
-    occur_bitlen = ?
-SQL
-        $update_sth->execute($kmer_size, $max_appearance_rate, $max_appearance_nrow, $occur_bitlen);
-        $update_sth->finish();
+        my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM kafsss_meta");
+        if ($count == 0) {
+            $dbh->do("INSERT INTO kafsss_meta DEFAULT VALUES");
+        }
+    };
+    if ($@) {
+        die "Failed to check kafsss_meta table: $@\n";
+    }
+    
+    # Use do() method which works correctly after reconnection
+    eval {
+        my $sql = sprintf(
+            "UPDATE kafsss_meta SET kmer_size = %d, max_appearance_rate = %f, max_appearance_nrow = %d, occur_bitlen = %d",
+            $kmer_size, $max_appearance_rate, $max_appearance_nrow, $occur_bitlen
+        );
+        $dbh->do($sql);
         print "Metadata updated: kmer_size=$kmer_size, max_appearance_rate=$max_appearance_rate, max_appearance_nrow=$max_appearance_nrow, occur_bitlen=$occur_bitlen\n";
     };
     
@@ -1085,8 +1119,14 @@ sub create_partition_indexes_for_column {
                 die "Failed to fork worker process: $!\n";
             } elsif ($pid == 0) {
                 # Child process
-                create_single_partition_index($partition, $column, $tablespace, 
-                                             $pg_version, $use_highfreq_cache);
+                eval {
+                    create_single_partition_index($partition, $column, $tablespace, 
+                                                 $pg_version, $use_highfreq_cache);
+                };
+                if ($@) {
+                    print STDERR "[Worker $$] Error: $@\n";
+                    exit 1;
+                }
                 exit 0;
             } else {
                 # Parent process
@@ -1095,23 +1135,55 @@ sub create_partition_indexes_for_column {
             }
         }
         
-        # Wait for any worker to finish
-        my $finished_pid = waitpid(-1, WNOHANG);
-        if ($finished_pid > 0) {
-            my $partition = $active_workers{$finished_pid};
-            my $exit_status = $? >> 8;
-            
-            if ($exit_status == 0) {
-                print "Worker PID $finished_pid completed successfully for partition '$partition'\n";
-            } else {
-                die "Worker PID $finished_pid failed for partition '$partition' with exit code $exit_status\n";
+        # Wait for any worker to finish (blocking wait if at max workers)
+        if (keys %active_workers >= $num_workers || $partition_index >= @partitions) {
+            my $finished_pid = waitpid(-1, 0);  # Blocking wait
+            if ($finished_pid > 0) {
+                my $partition = $active_workers{$finished_pid};
+                my $exit_status = $? >> 8;
+                
+                if ($exit_status == 0) {
+                    print "Worker PID $finished_pid completed successfully for partition '$partition'\n";
+                } else {
+                    # Kill all remaining workers and clean up
+                    foreach my $worker_pid (keys %active_workers) {
+                        kill 'TERM', $worker_pid if $worker_pid != $finished_pid;
+                    }
+                    # Wait for all workers to exit
+                    while (keys %active_workers > 0) {
+                        my $pid = waitpid(-1, 0);
+                        delete $active_workers{$pid} if $pid > 0;
+                    }
+                    die "Worker PID $finished_pid failed for partition '$partition' with exit code $exit_status\n";
+                }
+                
+                delete $active_workers{$finished_pid};
             }
-            
-            delete $active_workers{$finished_pid};
+        } else {
+            # Non-blocking check when we can start more workers
+            my $finished_pid = waitpid(-1, WNOHANG);
+            if ($finished_pid > 0) {
+                my $partition = $active_workers{$finished_pid};
+                my $exit_status = $? >> 8;
+                
+                if ($exit_status == 0) {
+                    print "Worker PID $finished_pid completed successfully for partition '$partition'\n";
+                } else {
+                    # Kill all remaining workers and clean up
+                    foreach my $worker_pid (keys %active_workers) {
+                        kill 'TERM', $worker_pid if $worker_pid != $finished_pid;
+                    }
+                    # Wait for all workers to exit
+                    while (keys %active_workers > 0) {
+                        my $pid = waitpid(-1, 0);
+                        delete $active_workers{$pid} if $pid > 0;
+                    }
+                    die "Worker PID $finished_pid failed for partition '$partition' with exit code $exit_status\n";
+                }
+                
+                delete $active_workers{$finished_pid};
+            }
         }
-        
-        # Brief sleep to avoid busy waiting
-        select(undef, undef, undef, 0.1) if keys %active_workers > 0;
     }
 }
 
@@ -1123,8 +1195,11 @@ sub create_single_partition_index {
     my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
     
     my $worker_dbh = DBI->connect($dsn, $username, $password, {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         pg_enable_utf8 => 1
     }) or die "[Worker $$] Cannot connect to database '$database_name': $DBI::errstr\n";
     
@@ -1144,6 +1219,7 @@ sub create_single_partition_index {
         }
     };
     if ($@) {
+        $worker_dbh->disconnect() if $worker_dbh;
         die "[Worker $$] Failed to set GUC variables: $@\n";
     }
     
@@ -1154,28 +1230,17 @@ sub create_single_partition_index {
         $worker_dbh->do("SET temp_buffers = '$temporarybuffer'");
     };
     if ($@) {
+        $worker_dbh->disconnect() if $worker_dbh;
         die "[Worker $$] Failed to set memory parameters: $@\n";
     }
     
-    # Verify cache is loaded if needed (for seq column only)
+    # Note: Cache should be loaded by parent process or kafsspreload before running kafssindex
+    # Worker processes should NOT try to load cache themselves
     if ($use_highfreq_cache && $column->{name} eq 'seq') {
-        eval {
-            my $load_sth = $worker_dbh->prepare("SELECT kmersearch_parallel_highfreq_kmer_cache_load('kafsss_data', 'seq')");
-            $load_sth->execute();
-            my ($load_result) = $load_sth->fetchrow_array();
-            $load_sth->finish();
-            
-            if (!$load_result) {
-                die "kmersearch_parallel_highfreq_kmer_cache_load() returned false\n";
-            }
-            print "[Worker $$] Verified high-frequency k-mer cache is loaded.\n";
-        };
-        if ($@) {
-            die "[Worker $$] Failed to verify cache load: $@\n";
-        }
+        print "[Worker $$] Using pre-loaded high-frequency k-mer cache.\n";
     }
     
-    # Create index on partition
+    # Create index on partition with proper error handling
     my $index_name = "idx_${partition_name}_$column->{name}_gin";
     my $index_sql = "CREATE INDEX IF NOT EXISTS $index_name ON $partition_name USING gin($column->{name}";
     
@@ -1191,14 +1256,23 @@ sub create_single_partition_index {
     
     print "[Worker $$] Creating index '$index_name' on partition '$partition_name'...\n";
     
+    # Try to create index with error handling
     eval {
+        local $SIG{PIPE} = 'IGNORE';  # Ignore SIGPIPE
         $worker_dbh->do($index_sql);
         print "[Worker $$] Index '$index_name' created successfully.\n";
     };
-    if ($@) {
-        die "[Worker $$] Failed to create index '$index_name': $@\n";
+    
+    my $error = $@;
+    
+    # Always disconnect properly
+    if ($worker_dbh) {
+        eval { $worker_dbh->disconnect(); };
     }
     
-    $worker_dbh->disconnect();
+    if ($error) {
+        die "[Worker $$] Failed to create index '$index_name': $error\n";
+    }
+    
     print "[Worker $$] Completed indexing column '$column->{name}' on partition '$partition_name'.\n";
 }

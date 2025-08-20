@@ -33,6 +33,7 @@ my $numthreads = 0;
 my $workingmemory = '8GB';
 my $maintenanceworkingmemory = '8GB';
 my $temporarybuffer = '512MB';
+my $tablespace = '';
 my $verbose = 0;
 my $overwrite = 0;
 my $help = 0;
@@ -51,6 +52,7 @@ GetOptions(
     'workingmemory=s' => \$workingmemory,
     'maintenanceworkingmemory=s' => \$maintenanceworkingmemory,
     'temporarybuffer=s' => \$temporarybuffer,
+    'tablespace=s' => \$tablespace,
     'verbose|v' => \$verbose,
     'overwrite' => \$overwrite,
     'help|h' => \$help,
@@ -95,6 +97,7 @@ print "Num threads: " . ($numthreads ? $numthreads : 'default') . "\n";
 print "Working memory: $workingmemory\n";
 print "Maintenance working memory: $maintenanceworkingmemory\n";
 print "Temporary buffer: $temporarybuffer\n";
+print "Tablespace: " . ($tablespace ? $tablespace : "(default)") . "\n" if $verbose;
 print "Overwrite: " . ($overwrite ? 'yes' : 'no') . "\n";
 
 # Connect to PostgreSQL server first for validation
@@ -102,8 +105,11 @@ my $password = $ENV{PGPASSWORD} || '';
 my $server_dsn = "DBI:Pg:host=$host;port=$port";
 
 my $server_dbh = DBI->connect($server_dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to PostgreSQL server: $DBI::errstr\n";
 
@@ -122,8 +128,11 @@ $server_dbh->disconnect();
 # Connect to target database
 my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
 my $dbh = DBI->connect($dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
 
@@ -174,7 +183,7 @@ if ($mode eq 'create') {
             exit 0;
         }
     }
-    perform_highfreq_analysis($dbh);
+    perform_highfreq_analysis($dbh, $tablespace);
 } elsif ($mode eq 'drop') {
     undo_highfreq_analysis($dbh);
 }
@@ -215,6 +224,7 @@ Other options:
   --workingmemory=SIZE  Work memory for each operation (default: 8GB)
   --maintenanceworkingmemory=SIZE  Maintenance work memory (default: 8GB)
   --temporarybuffer=SIZE  Temporary buffer size (default: 512MB)
+  --tablespace=NAME Target tablespace for highfreq tables (default: database default)
   --verbose, -v     Show detailed processing messages (default: false)
   --overwrite       Overwrite existing analysis (only for --mode=create)
   --help, -h        Show this help message
@@ -231,6 +241,7 @@ Examples:
   kafssfreq --mode=create --kmersize=16 --numthreads=32 mydb
   kafssfreq --mode=create --maxpappear=0.3 --maxnappear=500 mydb
   kafssfreq --mode=create --overwrite --numthreads=32 mydb
+  kafssfreq --mode=create --tablespace=fast_ssd mydb
 
 EOF
 }
@@ -397,9 +408,47 @@ sub set_parallel_parameters {
 }
 
 sub perform_highfreq_analysis {
-    my ($dbh) = @_;
+    my ($dbh, $tablespace) = @_;
     
     print "Performing high-frequency k-mer analysis...\n";
+    
+    # Set tablespace if specified
+    if ($tablespace) {
+        print "Setting tablespace to '$tablespace' for kmersearch_highfreq_kmer table...\n" if $verbose;
+        
+        # Check if table exists before trying to alter it
+        my $sth = $dbh->prepare(<<SQL);
+SELECT COUNT(*) 
+FROM information_schema.tables 
+WHERE table_name = 'kmersearch_highfreq_kmer'
+SQL
+        $sth->execute();
+        my ($table_exists) = $sth->fetchrow_array();
+        $sth->finish();
+        
+        if ($table_exists > 0) {
+            eval {
+                $dbh->do("ALTER TABLE kmersearch_highfreq_kmer SET TABLESPACE $tablespace");
+                print "Tablespace set to '$tablespace' for kmersearch_highfreq_kmer table.\n" if $verbose;
+            };
+            if ($@) {
+                print "Warning: Failed to set tablespace for kmersearch_highfreq_kmer: $@\n" if $verbose;
+            }
+        }
+    }
+    
+    # Delete temporary files before analysis
+    print "Cleaning up temporary files...\n" if $verbose;
+    eval {
+        my $sth = $dbh->prepare("SELECT kmersearch_delete_tempfiles()");
+        $sth->execute();
+        my ($delete_result) = $sth->fetchrow_array();
+        $sth->finish();
+        print "Temporary files deleted: $delete_result\n" if $verbose;
+    };
+    if ($@) {
+        print "Warning: Failed to delete temporary files: $@\n" if $verbose;
+    }
     
     eval {
         my $sth = $dbh->prepare("SELECT kmersearch_perform_highfreq_analysis('kafsss_data', 'seq')");

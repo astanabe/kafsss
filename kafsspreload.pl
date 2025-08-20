@@ -148,7 +148,7 @@ sub main {
             print "\n";
         } elsif ($input eq '') {
             # Empty input, just continue
-            continue;
+            next;
         } else {
             print "Unknown command: '$input'. Type 'help' for available commands.\n";
         }
@@ -168,8 +168,10 @@ sub connect_to_database {
     # Try to connect
     $dbh = DBI->connect($dsn, $username, $password, {
         AutoCommit => 1,
-        RaiseError => 1,
         PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
     }) or die "Cannot connect to database: $DBI::errstr\n";
     
     print_log("Connected to database successfully");
@@ -210,22 +212,8 @@ sub load_cache {
     }
 }
 
-sub free_cache {
-    return unless $cache_loaded;
-    
-    print_log("Freeing high-frequency k-mer cache...");
-    
-    eval {
-        $dbh->do("SELECT kmersearch_parallel_highfreq_kmer_cache_free(?, ?)", 
-                 undef, $table_name, $column_name);
-        $cache_loaded = 0;
-        print_log("Cache freed successfully");
-    };
-    
-    if ($@) {
-        warn "Warning: Failed to free cache: $@\n";
-    }
-}
+# Cache freeing is not needed - PostgreSQL will automatically handle it
+# when the connection is closed or the process terminates
 
 sub check_connection {
     eval {
@@ -377,6 +365,7 @@ sub print_status {
         print "Cache status: NOT LOADED\n";
     }
     
+    print "\nNote: Cache will be automatically freed when this program exits.\n";
     print "==================\n\n";
 }
 
@@ -387,13 +376,15 @@ sub handle_signal {
 }
 
 sub cleanup_and_exit {
-    # Free cache if loaded
-    free_cache() if $cache_loaded;
+    # Cache will be automatically freed by PostgreSQL on disconnect
     
     # Disconnect from database
     if ($dbh) {
         print_log("Disconnecting from database...");
-        $dbh->disconnect();
+        eval {
+            local $SIG{__WARN__} = sub {};  # Suppress warnings during shutdown
+            $dbh->disconnect();
+        };
     }
     
     print_log("kafsspreload terminated");

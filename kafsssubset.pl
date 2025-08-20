@@ -27,6 +27,7 @@ my $numthreads = $default_numthreads;
 my $batchsize = $default_batchsize;
 my @subsets = ();
 my $mode = 'add';
+my $tablespace = '';
 my $verbose = 0;
 my $help = 0;
 
@@ -39,6 +40,7 @@ GetOptions(
     'batchsize=i' => \$batchsize,
     'subset=s' => \@subsets,
     'mode=s' => \$mode,
+    'tablespace=s' => \$tablespace,
     'verbose|v' => \$verbose,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
@@ -100,6 +102,7 @@ print "Port: $port\n";
 print "Username: $username\n";
 print "Number of threads: $numthreads\n";
 print "Batch size: $batchsize\n";
+print "Tablespace: " . ($tablespace ? $tablespace : "(default)") . "\n" if $verbose;
 print "Subsets: " . join(', ', @all_subsets) . "\n";
 
 # Connect to PostgreSQL server for validation
@@ -107,8 +110,11 @@ my $password = $ENV{PGPASSWORD} || '';
 my $server_dsn = "DBI:Pg:dbname=postgres;host=$host;port=$port";
 
 my $server_dbh = DBI->connect($server_dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to PostgreSQL server: $DBI::errstr\n";
 
@@ -121,8 +127,11 @@ $server_dbh->disconnect();
 my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
 
 my $dbh = DBI->connect($dsn, $username, $password, {
-    RaiseError => 1,
     AutoCommit => 1,
+    PrintError => 0,
+    RaiseError => 1,
+    ShowErrorStatement => 1,
+    AutoInactiveDestroy => 1,
     pg_enable_utf8 => 1
 }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
 
@@ -144,6 +153,27 @@ eval {
 };
 if ($@) {
     die "Failed to acquire advisory lock: $@\n";
+}
+
+# Set tablespace if specified
+if ($tablespace) {
+    print "Setting tablespace to '$tablespace' for tables...\n" if $verbose;
+    
+    eval {
+        $dbh->do("ALTER TABLE kafsss_data SET TABLESPACE $tablespace");
+        print "Tablespace set to '$tablespace' for kafsss_data table.\n" if $verbose;
+    };
+    if ($@) {
+        print "Warning: Failed to set tablespace for kafsss_data: $@\n";
+    }
+    
+    eval {
+        $dbh->do("ALTER TABLE kafsss_meta SET TABLESPACE $tablespace");
+        print "Tablespace set to '$tablespace' for kafsss_meta table.\n" if $verbose;
+    };
+    if ($@) {
+        print "Warning: Failed to set tablespace for kafsss_meta: $@\n";
+    }
 }
 
 # Disconnect database connection before parallel processing to avoid connection sharing
@@ -198,6 +228,7 @@ Other options:
   --username=USER   PostgreSQL username (default: \$PGUSER or current user)
   --numthreads=INT  Number of parallel threads (default: 1)
   --batchsize=INT   Batch size for processing (default: 1000000)
+  --tablespace=NAME Target tablespace for tables (default: database default)
   --verbose, -v     Show detailed processing messages (default: false)
   --help, -h        Show this help message
 
@@ -212,6 +243,9 @@ Examples:
   kafsssubset --subset=bacteria accessions.txt mydb
   kafsssubset --subset=bacteria,archaea accessions.txt mydb
   kafsssubset --numthreads=4 --subset=viruses accessions.txt mydb
+  
+  # With tablespace
+  kafsssubset --tablespace=fast_ssd --subset=bacteria accessions.txt mydb
   
   # Remove subsets
   kafsssubset --mode=del --subset=bacteria accessions.txt mydb
@@ -328,8 +362,11 @@ sub process_batch_items {
     my $child_dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
                 
     my $child_dbh = DBI->connect($child_dsn, $username, $password, {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         pg_enable_utf8 => 1
     }) or die "Cannot connect to database in child process: $DBI::errstr\n";
     
@@ -562,8 +599,11 @@ sub process_accessions_single_threaded {
     my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
         
     my $dbh = DBI->connect($dsn, $username, $password, {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         pg_enable_utf8 => 1
     }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
     
@@ -707,8 +747,11 @@ sub process_all_rows {
     my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
     
     my $temp_dbh = DBI->connect($dsn, $username, $password, {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         pg_enable_utf8 => 1
     }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
     
@@ -788,8 +831,11 @@ sub process_all_rows_batch_items {
     my $child_dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
                 
     my $child_dbh = DBI->connect($child_dsn, $username, $password, {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         pg_enable_utf8 => 1
     }) or die "Cannot connect to database in child process: $DBI::errstr\n";
     
@@ -875,8 +921,11 @@ sub update_meta_statistics {
     my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
         
     my $dbh = DBI->connect($dsn, $username, $password, {
-        RaiseError => 1,
         AutoCommit => 1,
+        PrintError => 0,
+        RaiseError => 1,
+        ShowErrorStatement => 1,
+        AutoInactiveDestroy => 1,
         pg_enable_utf8 => 1
     }) or die "Cannot connect to database '$database_name': $DBI::errstr\n";
     
