@@ -14,11 +14,19 @@ my $VERSION = "1.0.0";
 my $default_host = $ENV{PGHOST} || 'localhost';
 my $default_port = $ENV{PGPORT} || 5432;
 my $default_user = $ENV{PGUSER} || getpwuid($<);
+my $default_kmer_size = 8;
+my $default_max_appearance_rate = 0.5;
+my $default_max_appearance_nrow = 0;
+my $default_occur_bitlen = 8;
 
 # Command line options
 my $host = $default_host;
 my $port = $default_port;
 my $username = $default_user;
+my $kmer_size = undef;
+my $max_appearance_rate = undef;
+my $max_appearance_nrow = undef;
+my $occur_bitlen = undef;
 my $verbose = 0;
 my $help = 0;
 
@@ -27,6 +35,10 @@ GetOptions(
     'host=s' => \$host,
     'port=i' => \$port,
     'username=s' => \$username,
+    'kmersize=i' => \$kmer_size,
+    'maxpappear=f' => \$max_appearance_rate,
+    'maxnappear=i' => \$max_appearance_nrow,
+    'occurbitlen=i' => \$occur_bitlen,
     'verbose|v' => \$verbose,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
@@ -68,6 +80,12 @@ sub main {
     # Connect to database
     connect_to_database();
     
+    # Load and validate parameters from kmersearch_highfreq_kmer
+    load_and_validate_parameters();
+    
+    # Set GUC variables
+    set_guc_variables();
+    
     # Load cache
     load_cache();
     
@@ -75,24 +93,65 @@ sub main {
     $initial_table_hash = get_table_hash();
     $initial_system_hash = get_system_table_hash();
     
-    print_log("Cache loaded successfully. Starting monitoring loop...");
+    print_log("Cache loaded successfully.");
+    print "\n";
+    print "High-frequency k-mer cache is now active and accessible to other processes.\n";
+    print "The cache will remain available as long as this program is running.\n";
+    print "\n";
     
-    # Main monitoring loop
+    # User interaction loop
     while (!$exit_flag) {
-        # Sleep for 1 hour
-        for (my $i = 0; $i < 3600 && !$exit_flag; $i++) {
-            sleep(1);
+        print "Press 'exit' or 'q' to quit, or 'status' to check cache status: ";
+        
+        # Read user input
+        my $input = <STDIN>;
+        
+        # Handle EOF (Ctrl+D)
+        if (!defined($input)) {
+            print "\nReceived EOF. Initiating graceful shutdown...\n";
+            last;
         }
         
-        last if $exit_flag;
+        chomp($input);
+        $input = lc($input);  # Convert to lowercase for case-insensitive comparison
         
-        # Check for changes
-        if (!check_connection() || has_changes()) {
-            print_log("Changes detected or connection lost. Cleaning up and exiting...");
-            cleanup_and_exit();
+        # Process commands
+        if ($input eq 'exit' || $input eq 'q' || $input eq 'quit') {
+            print "Initiating graceful shutdown...\n";
+            last;
+        } elsif ($input eq 'status' || $input eq 's') {
+            # Check status
+            eval {
+                print_status();
+            };
+            if ($@) {
+                print "Error while checking status: $@\n";
+            }
+        } elsif ($input eq 'reconnect' || $input eq 'r') {
+            # Try to reconnect to database
+            print "Attempting to reconnect to database...\n";
+            eval {
+                $dbh->disconnect() if $dbh;
+                connect_to_database();
+                print "Reconnection successful.\n";
+            };
+            if ($@) {
+                print "Reconnection failed: $@\n";
+                print "The cache remains in memory but database connection is lost.\n";
+            }
+        } elsif ($input eq 'help' || $input eq 'h' || $input eq '?') {
+            print "\nAvailable commands:\n";
+            print "  exit, q, quit   - Exit the program and free the cache\n";
+            print "  status, s       - Show cache and connection status\n";
+            print "  reconnect, r    - Attempt to reconnect to database\n";
+            print "  help, h, ?      - Show this help message\n";
+            print "\n";
+        } elsif ($input eq '') {
+            # Empty input, just continue
+            continue;
+        } else {
+            print "Unknown command: '$input'. Type 'help' for available commands.\n";
         }
-        
-        print_log("No changes detected. Continuing monitoring...");
     }
     
     cleanup_and_exit();
@@ -137,6 +196,7 @@ sub connect_to_database {
 
 sub load_cache {
     print_log("Loading high-frequency k-mer cache for $table_name.$column_name...");
+    print_log("Parameters: kmer_size=$kmer_size, occur_bitlen=$occur_bitlen, max_appearance_rate=$max_appearance_rate, max_appearance_nrow=$max_appearance_nrow");
     
     eval {
         $dbh->do("SELECT kmersearch_parallel_highfreq_kmer_cache_load(?, ?)", 
@@ -268,6 +328,58 @@ sub generate_hash {
     return md5_hex($str);
 }
 
+sub print_status {
+    print "\n=== Cache Status ===\n";
+    
+    # Check database connection
+    my $connection_ok = 0;
+    eval {
+        $connection_ok = check_connection();
+    };
+    if ($@) {
+        print "Database connection: ERROR - $@\n";
+        $connection_ok = 0;
+    } elsif ($connection_ok) {
+        print "Database connection: ACTIVE\n";
+    } else {
+        print "Database connection: LOST\n";
+    }
+    
+    # Check cache status
+    if ($cache_loaded) {
+        print "Cache status: LOADED\n";
+        print "Table: $table_name\n";
+        print "Column: $column_name\n";
+        print "Parameters:\n";
+        print "  kmer_size: $kmer_size\n";
+        print "  occur_bitlen: $occur_bitlen\n";
+        print "  max_appearance_rate: $max_appearance_rate\n";
+        print "  max_appearance_nrow: $max_appearance_nrow\n";
+        
+        # Only check for changes if connection is active
+        if ($connection_ok) {
+            eval {
+                if (has_changes()) {
+                    print "\nWARNING: Table or system tables have changed since cache was loaded!\n";
+                    print "The cache may be outdated. Consider restarting the program.\n";
+                } else {
+                    print "\nNo changes detected since cache was loaded.\n";
+                }
+            };
+            if ($@) {
+                print "\nWARNING: Could not check for changes: $@\n";
+            }
+        } else {
+            print "\nWARNING: Cannot check for changes - database connection lost.\n";
+            print "The cache remains in memory but may be outdated.\n";
+        }
+    } else {
+        print "Cache status: NOT LOADED\n";
+    }
+    
+    print "==================\n\n";
+}
+
 sub handle_signal {
     my ($signal) = @_;
     print_log("Received signal $signal. Initiating graceful shutdown...");
@@ -297,6 +409,166 @@ sub print_log {
     print STDERR "[$timestamp] $message\n";
 }
 
+sub load_and_validate_parameters {
+    print_log("Checking for parameters in kmersearch_highfreq_kmer table...");
+    
+    # Track which parameters were specified on command line
+    my $kmer_size_specified = defined($kmer_size);
+    my $max_appearance_rate_specified = defined($max_appearance_rate);
+    my $max_appearance_nrow_specified = defined($max_appearance_nrow);
+    my $occur_bitlen_specified = defined($occur_bitlen);
+    
+    # Try to get parameters from kmersearch_highfreq_kmer_meta table
+    my $sth = $dbh->prepare(<<SQL);
+SELECT DISTINCT kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
+FROM kmersearch_highfreq_kmer_meta
+WHERE table_oid = ?::regclass
+  AND column_name = ?
+SQL
+    
+    eval {
+        $sth->execute($table_name, $column_name);
+        my @rows = ();
+        while (my $row = $sth->fetchrow_hashref()) {
+            push @rows, $row;
+        }
+        $sth->finish();
+        
+        if (@rows == 0) {
+            # No data in kmersearch_highfreq_kmer_meta table
+            die "Error: No high-frequency k-mer data found in kmersearch_highfreq_kmer_meta table for $table_name.$column_name.\n" .
+                "Please run kafssfreq first to generate high-frequency k-mer data.\n";
+        } elsif (@rows == 1) {
+            # Found exactly one set of parameters
+            my $row = $rows[0];
+            my $db_kmer_size = $row->{kmer_size};
+            my $db_occur_bitlen = $row->{occur_bitlen};
+            my $db_max_appearance_rate = $row->{max_appearance_rate};
+            my $db_max_appearance_nrow = $row->{max_appearance_nrow};
+            
+            print_log("Found parameters in kmersearch_highfreq_kmer_meta table:");
+            print_log("  kmer_size: $db_kmer_size");
+            print_log("  occur_bitlen: $db_occur_bitlen");
+            print_log("  max_appearance_rate: $db_max_appearance_rate");
+            print_log("  max_appearance_nrow: $db_max_appearance_nrow");
+            
+            # Validate or use database values
+            if ($kmer_size_specified) {
+                if ($kmer_size != $db_kmer_size) {
+                    die "Error: Specified kmer_size ($kmer_size) does not match value in kmersearch_highfreq_kmer_meta table ($db_kmer_size).\n" .
+                        "Please use --kmersize=$db_kmer_size or run kafssfreq again with --kmersize=$kmer_size.\n";
+                }
+            } else {
+                $kmer_size = $db_kmer_size;
+                print_log("Using kmer_size from database: $kmer_size");
+            }
+            
+            if ($occur_bitlen_specified) {
+                if ($occur_bitlen != $db_occur_bitlen) {
+                    die "Error: Specified occur_bitlen ($occur_bitlen) does not match value in kmersearch_highfreq_kmer_meta table ($db_occur_bitlen).\n" .
+                        "Please use --occurbitlen=$db_occur_bitlen or run kafssfreq again with --occurbitlen=$occur_bitlen.\n";
+                }
+            } else {
+                $occur_bitlen = $db_occur_bitlen;
+                print_log("Using occur_bitlen from database: $occur_bitlen");
+            }
+            
+            if ($max_appearance_rate_specified) {
+                if (abs($max_appearance_rate - $db_max_appearance_rate) > 0.0001) {
+                    die "Error: Specified max_appearance_rate ($max_appearance_rate) does not match value in kmersearch_highfreq_kmer_meta table ($db_max_appearance_rate).\n" .
+                        "Please use --maxpappear=$db_max_appearance_rate or run kafssfreq again with --maxpappear=$max_appearance_rate.\n";
+                }
+            } else {
+                $max_appearance_rate = $db_max_appearance_rate;
+                print_log("Using max_appearance_rate from database: $max_appearance_rate");
+            }
+            
+            if ($max_appearance_nrow_specified) {
+                if ($max_appearance_nrow != $db_max_appearance_nrow) {
+                    die "Error: Specified max_appearance_nrow ($max_appearance_nrow) does not match value in kmersearch_highfreq_kmer_meta table ($db_max_appearance_nrow).\n" .
+                        "Please use --maxnappear=$db_max_appearance_nrow or run kafssfreq again with --maxnappear=$max_appearance_nrow.\n";
+                }
+            } else {
+                $max_appearance_nrow = $db_max_appearance_nrow;
+                print_log("Using max_appearance_nrow from database: $max_appearance_nrow");
+            }
+        } else {
+            # Multiple different parameter sets found
+            die "Error: Multiple different parameter sets found in kmersearch_highfreq_kmer_meta table.\n" .
+                "This indicates inconsistent frequency analysis. Please run kafssfreq again to fix this.\n";
+        }
+    };
+    
+    if ($@) {
+        die "Failed to load parameters from kmersearch_highfreq_kmer_meta table: $@";
+    }
+    
+    # Final validation of parameters
+    die "kmersize must be between 4 and 64\n" unless $kmer_size >= 4 && $kmer_size <= 64;
+    die "maxpappear must be between 0.0 and 1.0\n" unless $max_appearance_rate >= 0.0 && $max_appearance_rate <= 1.0;
+    die "maxnappear must be non-negative\n" unless $max_appearance_nrow >= 0;
+    die "occurbitlen must be between 0 and 16\n" unless $occur_bitlen >= 0 && $occur_bitlen <= 16;
+}
+
+sub set_guc_variables {
+    print_log("Setting GUC variables...");
+    
+    # Set kmer_size
+    eval {
+        $dbh->do("SET kmersearch.kmer_size = $kmer_size");
+        print_log("Set kmersearch.kmer_size = $kmer_size");
+    };
+    if ($@) {
+        die "Failed to set kmersearch.kmer_size: $@\n";
+    }
+    
+    # Set occur_bitlen
+    eval {
+        $dbh->do("SET kmersearch.occur_bitlen = $occur_bitlen");
+        print_log("Set kmersearch.occur_bitlen = $occur_bitlen");
+    };
+    if ($@) {
+        die "Failed to set kmersearch.occur_bitlen: $@\n";
+    }
+    
+    # Set max_appearance_rate
+    eval {
+        $dbh->do("SET kmersearch.max_appearance_rate = $max_appearance_rate");
+        print_log("Set kmersearch.max_appearance_rate = $max_appearance_rate");
+    };
+    if ($@) {
+        die "Failed to set kmersearch.max_appearance_rate: $@\n";
+    }
+    
+    # Set max_appearance_nrow
+    eval {
+        $dbh->do("SET kmersearch.max_appearance_nrow = $max_appearance_nrow");
+        print_log("Set kmersearch.max_appearance_nrow = $max_appearance_nrow");
+    };
+    if ($@) {
+        die "Failed to set kmersearch.max_appearance_nrow: $@\n";
+    }
+    
+    # Set preclude_highfreq_kmer and force_use_parallel_highfreq_kmer_cache
+    eval {
+        $dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
+        print_log("Set kmersearch.preclude_highfreq_kmer = true");
+    };
+    if ($@) {
+        die "Failed to set kmersearch.preclude_highfreq_kmer: $@\n";
+    }
+    
+    eval {
+        $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
+        print_log("Set kmersearch.force_use_parallel_highfreq_kmer_cache = true");
+    };
+    if ($@) {
+        die "Failed to set kmersearch.force_use_parallel_highfreq_kmer_cache: $@\n";
+    }
+    
+    print_log("GUC variables set successfully.");
+}
+
 sub print_help {
     my $prog = basename($0);
     
@@ -311,16 +583,26 @@ Usage:
 Description:
   This tool loads high-frequency k-mer information into memory cache using
   pg_kmersearch's kmersearch_parallel_highfreq_kmer_cache_load function.
-  It maintains the database connection and monitors for changes hourly.
-  When changes are detected, it frees the cache and exits gracefully.
+  It maintains the database connection and keeps the cache available for
+  other PostgreSQL processes.
   
-  While this daemon is running, kafssindex builds and kafsssearch/kafsssearchserver
+  While this program is running, kafssindex builds and kafsssearch/kafsssearchserver
   operations will be accelerated due to the preloaded cache.
+  
+  The program runs interactively and accepts the following commands:
+    exit, q, quit   - Exit the program and free the cache
+    status, s       - Show cache and connection status
+    reconnect, r    - Attempt to reconnect to database
+    help, h, ?      - Show help message
 
 Options:
   --host <host>        PostgreSQL server host (default: $default_host)
   --port <port>        PostgreSQL server port (default: $default_port)
   --username <user>    PostgreSQL username (default: $default_user)
+  --kmersize <int>     K-mer length (default: from kmersearch_highfreq_kmer table or $default_kmer_size)
+  --maxpappear <real>  Max k-mer appearance rate (default: from table or $default_max_appearance_rate)
+  --maxnappear <int>   Max rows containing k-mer (default: from table or $default_max_appearance_nrow)
+  --occurbitlen <int>  Bits for occurrence count (default: from table or $default_occur_bitlen)
   --verbose, -v        Enable verbose output
   --help, -h           Show this help message
 
@@ -336,7 +618,8 @@ Signals:
 Notes:
   - Table name is fixed to 'kafsss_data'
   - Column name is fixed to 'seq'
-  - Monitoring interval is 1 hour
+  - The cache remains accessible to other PostgreSQL processes while this program runs
+  - Interactive mode allows checking status and graceful shutdown
   - Requires pg_kmersearch extension and kafssfreq to be run first
 
 Examples:

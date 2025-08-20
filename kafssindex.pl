@@ -26,10 +26,10 @@ my $port = $default_port;
 my $username = $default_user;
 my $tablespace = '';
 my $mode = '';
-my $kmer_size = $default_kmer_size;
-my $max_appearance_rate = $default_max_appearance_rate;
-my $max_appearance_nrow = $default_max_appearance_nrow;
-my $occur_bitlen = $default_occur_bitlen;
+my $kmer_size = undef;
+my $max_appearance_rate = undef;
+my $max_appearance_nrow = undef;
+my $occur_bitlen = undef;
 my $numthreads = 0;
 my $workingmemory = '8GB';
 my $maintenanceworkingmemory = '8GB';
@@ -74,11 +74,7 @@ my ($database_name) = @ARGV;
 die "Mode must be specified with --mode option (create or drop)\n" unless $mode;
 die "Invalid mode '$mode'. Must be 'create' or 'drop'\n" unless $mode eq 'create' || $mode eq 'drop';
 
-# Validate parameters
-die "kmersize must be between 4 and 64\n" unless $kmer_size >= 4 && $kmer_size <= 64;
-die "maxpappear must be between 0.0 and 1.0\n" unless $max_appearance_rate >= 0.0 && $max_appearance_rate <= 1.0;
-die "maxnappear must be non-negative\n" unless $max_appearance_nrow >= 0;
-die "occurbitlen must be between 0 and 16\n" unless $occur_bitlen >= 0 && $occur_bitlen <= 16;
+# Validate numthreads before connecting to database
 die "numthreads must be non-negative\n" unless $numthreads >= 0;
 
 print "kafssindex version $VERSION\n";
@@ -88,14 +84,6 @@ print "Port: $port\n";
 print "Username: $username\n";
 print "Tablespace: " . ($tablespace ? $tablespace : 'default') . "\n";
 print "Mode: $mode\n";
-print "K-mer size: $kmer_size\n";
-print "Max appearance rate: $max_appearance_rate\n";
-print "Max appearance nrow: $max_appearance_nrow\n";
-print "Occur bitlen: $occur_bitlen\n";
-print "Num threads: " . ($numthreads ? $numthreads : 'default') . "\n";
-print "Working memory: $workingmemory\n";
-print "Maintenance working memory: $maintenanceworkingmemory\n";
-print "Temporary buffer: $temporarybuffer\n";
 
 # Connect to PostgreSQL server first for validation
 my $password = $ENV{PGPASSWORD} || '';
@@ -155,13 +143,27 @@ verify_database_structure($dbh);
 my $pg_version = get_postgresql_version($dbh);
 print "PostgreSQL version: $pg_version\n" if $verbose;
 
-# Set GUC variables
-set_guc_variables($dbh);
-
-# Execute the requested operation
+# Load and validate parameters from kmersearch_highfreq_kmer if needed (only for create mode)
 if ($mode eq 'create') {
+    load_and_validate_parameters($dbh);
+    
+    # Print parameters after loading/validation
+    print "K-mer size: $kmer_size\n";
+    print "Max appearance rate: $max_appearance_rate\n";
+    print "Max appearance nrow: $max_appearance_nrow\n";
+    print "Occur bitlen: $occur_bitlen\n";
+    print "Num threads: " . ($numthreads ? $numthreads : 'default') . "\n";
+    print "Working memory: $workingmemory\n";
+    print "Maintenance working memory: $maintenanceworkingmemory\n";
+    print "Temporary buffer: $temporarybuffer\n";
+    
+    # Set GUC variables
+    set_guc_variables($dbh);
+    
+    # Execute create operation
     create_indexes($dbh, $pg_version);
 } elsif ($mode eq 'drop') {
+    # Execute drop operation
     drop_indexes($dbh);
 }
 
@@ -286,11 +288,13 @@ sub create_indexes {
     
     # Check if kafsss_data is a partitioned table
     my $is_partitioned = check_if_partitioned($dbh, 'kafsss_data');
-    if ($is_partitioned) {
-        print "Table 'kafsss_data' is partitioned.\n";
-    } else {
-        print "Table 'kafsss_data' is not partitioned.\n";
+    if (!$is_partitioned) {
+        die "Error: Table 'kafsss_data' is not partitioned.\n" .
+            "Please partition the table first using kafsspart:\n" .
+            "  kafsspart --npart=16 $database_name\n" .
+            "Then run kafssindex again.\n";
     }
+    print "Table 'kafsss_data' is partitioned.\n";
     
     # Validate and set memory parameters
     validate_and_set_memory_parameters($dbh, $workingmemory, $maintenanceworkingmemory, $temporarybuffer);
@@ -333,88 +337,70 @@ sub create_indexes {
     
     print "Selected operator class: $op_class (data_type=$seq_data_type, kmer_size=$kmer_size, occur_bitlen=$occur_bitlen, total_bits=$total_bits)\n";
     
-    # Determine if high-frequency analysis should be performed
-    my $should_perform_highfreq_analysis = ($max_appearance_rate > 0 || $max_appearance_nrow > 0);
-    my $highfreq_kmer_count = 0;
-    my $cache_loaded = 0;
-    my $parent_cache_loaded = 0;
+    # Check if matching high-frequency k-mer data exists in kmersearch_highfreq_kmer_meta
+    my $check_highfreq_sql = <<SQL;
+SELECT COUNT(*) 
+FROM kmersearch_highfreq_kmer_meta 
+WHERE table_oid = 'kafsss_data'::regclass 
+  AND column_name = 'seq'
+  AND kmer_size = ?
+  AND occur_bitlen = ?
+  AND max_appearance_rate = ?
+  AND max_appearance_nrow = ?
+SQL
     
-    if ($should_perform_highfreq_analysis) {
-        # Perform high-frequency k-mer analysis
-        perform_highfreq_analysis($dbh);
-        
-        # Check if any high-frequency k-mers were found
-        my $count_sth = $dbh->prepare("SELECT COUNT(*) FROM kmersearch_highfreq_kmer WHERE table_oid = 'kafsss_data'::regclass AND column_name = 'seq'");
-        $count_sth->execute();
-        ($highfreq_kmer_count) = $count_sth->fetchrow_array();
-        $count_sth->finish();
-        
-        print "High-frequency k-mer analysis found $highfreq_kmer_count high-frequency k-mers.\n";
-        
-        if ($highfreq_kmer_count > 0) {
-            # For partitioned tables, load cache in parent process and keep connection open
-            if ($is_partitioned) {
-                # Check if cache is already loaded (by kafsspreload or other process)
-                my $cache_already_loaded = check_cache_loaded($dbh, $pg_version);
-                
-                if (!$cache_already_loaded) {
-                    # Load cache before creating indexes
-                    load_cache($dbh, $pg_version);
-                    $cache_loaded = 1;
-                } else {
-                    print "High-frequency k-mer cache is already loaded.\n";
-                }
-                $parent_cache_loaded = 1;
-            } else {
-                # For non-partitioned tables, load cache normally
-                load_cache($dbh, $pg_version);
-                $cache_loaded = 1;
-            }
-            
-            # Enable high-frequency k-mer exclusion
-            eval {
-                $dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
-                print "Enabled high-frequency k-mer exclusion.\n";
-            };
-            if ($@) {
-                print "Warning: Failed to set kmersearch.preclude_highfreq_kmer: $@\n";
-            }
-            
-            # Enable parallel cache if PostgreSQL 18+
-            if ($pg_version >= 18) {
-                eval {
-                    $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
-                    print "Enabled parallel high-frequency k-mer cache.\n";
-                };
-                if ($@) {
-                    print "Warning: Failed to set kmersearch.force_use_parallel_highfreq_kmer_cache: $@\n";
-                }
-            }
-        }
+    my $check_sth = $dbh->prepare($check_highfreq_sql);
+    $check_sth->execute($kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow);
+    my ($matching_highfreq_count) = $check_sth->fetchrow_array();
+    $check_sth->finish();
+    
+    my $use_highfreq_cache = ($matching_highfreq_count > 0);
+    
+    if ($use_highfreq_cache) {
+        print "Found matching high-frequency k-mer metadata in kmersearch_highfreq_kmer_meta.\n";
+        print "High-frequency k-mer exclusion will be enabled for index creation.\n";
     } else {
-        print "High-frequency k-mer analysis disabled (max_appearance_rate=0 and max_appearance_nrow=0).\n";
+        print "No matching high-frequency k-mer metadata found in kmersearch_highfreq_kmer_meta.\n";
+        print "Creating indexes without high-frequency k-mer exclusion.\n";
     }
     
-    # Check if indexes already exist
-    my $existing_indexes = get_existing_indexes($dbh);
+    # Get list of partitions
+    my @partitions = get_partitions($dbh, 'kafsss_data');
     
-    if ($is_partitioned) {
-        # Create indexes on partitioned table
-        create_partitioned_indexes($dbh, $pg_version, $op_class, $tablespace, 
-                                   $parent_cache_loaded, $highfreq_kmer_count);
-    } else {
-        # Create indexes on regular table
-        create_regular_indexes($dbh, $existing_indexes, $op_class, $tablespace);
+    if (@partitions == 0) {
+        die "Error: No partitions found for kafsss_data table.\n" .
+            "Please partition the table first using kafsspart.\n";
     }
     
-    # Free cache after creating indexes (only if cache was loaded by this process)
-    # For partitioned tables, this happens after all partition and parent indexes are created
-    if ($cache_loaded && !$is_partitioned) {
-        free_cache($dbh, $pg_version);
-    } elsif ($cache_loaded && $is_partitioned) {
-        # For partitioned tables, free cache after all work is done
-        free_cache($dbh, $pg_version);
+    print "Found " . scalar(@partitions) . " partitions.\n";
+    
+    # Determine number of parallel workers
+    my $max_workers = $numthreads > 0 ? $numthreads : 4;
+    my $num_workers = (@partitions < $max_workers) ? @partitions : $max_workers;
+    
+    print "Using up to $num_workers parallel worker processes for index creation.\n";
+    
+    # Create indexes on partitions by column
+    # Process subset, then seqid, then seq columns in order
+    my @columns = (
+        { name => 'subset', op_class => '', type => 'gin' },
+        { name => 'seqid', op_class => '', type => 'gin' },
+        { name => 'seq', op_class => $op_class, type => 'gin' }
+    );
+    
+    for my $column (@columns) {
+        print "\nCreating indexes on column '$column->{name}' for all partitions...\n";
+        create_partition_indexes_for_column(\@partitions, $num_workers, $column, 
+                                            $tablespace, $pg_version, $use_highfreq_cache);
+        print "Completed indexes on column '$column->{name}' for all partitions.\n";
     }
+    
+    # Create indexes on parent table
+    print "\nCreating indexes on parent table 'kafsss_data'...\n";
+    create_parent_table_indexes($dbh, $op_class, $tablespace, $use_highfreq_cache);
+    
+    # Do not free cache - PostgreSQL will handle it automatically on disconnect
+    # This prevents interfering with other processes that may be using the cache
     
     # Update kafsss_meta table
     update_meta_table($dbh);
@@ -422,67 +408,92 @@ sub create_indexes {
     print "All indexes created successfully.\n";
 }
 
-sub create_regular_indexes {
-    my ($dbh, $existing_indexes, $op_class, $tablespace) = @_;
+sub create_parent_table_indexes {
+    my ($dbh, $op_class, $tablespace, $use_highfreq_cache) = @_;
     
-    # Create seq column GIN index with operator class
-    my $seq_index_name = 'idx_kafsss_data_seq_gin';
-    if (exists $existing_indexes->{$seq_index_name}) {
-        print "Index '$seq_index_name' already exists, skipping...\n";
-    } else {
-        print "Creating index '$seq_index_name' with operator class '$op_class'...\n";
-        my $seq_sql = "CREATE INDEX $seq_index_name ON kafsss_data USING gin(seq $op_class)";
-        if ($tablespace) {
-            $seq_sql .= " TABLESPACE \"$tablespace\"";
-        }
-        
+    # Set GUC variables for parent process
+    if ($use_highfreq_cache) {
         eval {
-            $dbh->do($seq_sql);
-            print "Index '$seq_index_name' created successfully.\n";
+            $dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
+            $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
+            print "Enabled high-frequency k-mer exclusion for parent table.\n";
         };
         if ($@) {
-            die "Failed to create index '$seq_index_name': $@\n";
+            die "Failed to set GUC variables for parent table: $@\n";
+        }
+        
+        # Verify cache is loaded
+        eval {
+            my $load_sth = $dbh->prepare("SELECT kmersearch_parallel_highfreq_kmer_cache_load('kafsss_data', 'seq')");
+            $load_sth->execute();
+            my ($load_result) = $load_sth->fetchrow_array();
+            $load_sth->finish();
+            
+            if (!$load_result) {
+                die "kmersearch_parallel_highfreq_kmer_cache_load() returned false\n";
+            }
+            print "Verified high-frequency k-mer cache is loaded.\n";
+        };
+        if ($@) {
+            die "Failed to verify cache load: $@\n";
+        }
+    } else {
+        eval {
+            $dbh->do("SET kmersearch.preclude_highfreq_kmer = false");
+            $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
+            print "Disabled high-frequency k-mer exclusion for parent table.\n";
+        };
+        if ($@) {
+            die "Failed to set GUC variables for parent table: $@\n";
         }
     }
     
-    # Create subset column GIN index
+    # Create subset column GIN index on parent table
     my $subset_index_name = 'idx_kafsss_data_subset_gin';
-    if (exists $existing_indexes->{$subset_index_name}) {
-        print "Index '$subset_index_name' already exists, skipping...\n";
-    } else {
-        print "Creating index '$subset_index_name'...\n";
-        my $subset_sql = "CREATE INDEX $subset_index_name ON kafsss_data USING gin(subset)";
-        if ($tablespace) {
-            $subset_sql .= " TABLESPACE \"$tablespace\"";
-        }
-        
-        eval {
-            $dbh->do($subset_sql);
-            print "Index '$subset_index_name' created successfully.\n";
-        };
-        if ($@) {
-            die "Failed to create index '$subset_index_name': $@\n";
-        }
+    print "Creating parent index '$subset_index_name'...\n";
+    my $subset_sql = "CREATE INDEX IF NOT EXISTS $subset_index_name ON kafsss_data USING gin(subset)";
+    if ($tablespace) {
+        $subset_sql .= " TABLESPACE \"$tablespace\"";
     }
     
-    # Create seqid column GIN index
+    eval {
+        $dbh->do($subset_sql);
+        print "Parent index '$subset_index_name' created successfully.\n";
+    };
+    if ($@) {
+        die "Failed to create parent index '$subset_index_name': $@\n";
+    }
+    
+    # Create seqid column GIN index on parent table
     my $seqid_index_name = 'idx_kafsss_data_seqid_gin';
-    if (exists $existing_indexes->{$seqid_index_name}) {
-        print "Index '$seqid_index_name' already exists, skipping...\n";
-    } else {
-        print "Creating index '$seqid_index_name'...\n";
-        my $seqid_sql = "CREATE INDEX $seqid_index_name ON kafsss_data USING gin(seqid)";
-        if ($tablespace) {
-            $seqid_sql .= " TABLESPACE \"$tablespace\"";
-        }
-        
-        eval {
-            $dbh->do($seqid_sql);
-            print "Index '$seqid_index_name' created successfully.\n";
-        };
-        if ($@) {
-            die "Failed to create index '$seqid_index_name': $@\n";
-        }
+    print "Creating parent index '$seqid_index_name'...\n";
+    my $seqid_sql = "CREATE INDEX IF NOT EXISTS $seqid_index_name ON kafsss_data USING gin(seqid)";
+    if ($tablespace) {
+        $seqid_sql .= " TABLESPACE \"$tablespace\"";
+    }
+    
+    eval {
+        $dbh->do($seqid_sql);
+        print "Parent index '$seqid_index_name' created successfully.\n";
+    };
+    if ($@) {
+        die "Failed to create parent index '$seqid_index_name': $@\n";
+    }
+    
+    # Create seq column GIN index on parent table
+    my $seq_index_name = 'idx_kafsss_data_seq_gin';
+    print "Creating parent index '$seq_index_name' with operator class '$op_class'...\n";
+    my $seq_sql = "CREATE INDEX IF NOT EXISTS $seq_index_name ON kafsss_data USING gin(seq $op_class)";
+    if ($tablespace) {
+        $seq_sql .= " TABLESPACE \"$tablespace\"";
+    }
+    
+    eval {
+        $dbh->do($seq_sql);
+        print "Parent index '$seq_index_name' created successfully.\n";
+    };
+    if ($@) {
+        die "Failed to create parent index '$seq_index_name': $@\n";
     }
 }
 
@@ -490,9 +501,6 @@ sub drop_indexes {
     my ($dbh) = @_;
     
     print "Dropping GIN indexes...\n";
-    
-    # Undo high-frequency k-mer analysis
-    undo_highfreq_analysis($dbh);
     
     # Get existing indexes
     my $existing_indexes = get_existing_indexes($dbh);
@@ -712,24 +720,6 @@ sub set_guc_variables {
     print "GUC variables set successfully.\n";
 }
 
-sub perform_highfreq_analysis {
-    my ($dbh) = @_;
-    
-    print "Performing high-frequency k-mer analysis...\n";
-    
-    eval {
-        my $sth = $dbh->prepare("SELECT kmersearch_perform_highfreq_analysis('kafsss_data', 'seq')");
-        $sth->execute();
-        my ($result) = $sth->fetchrow_array();
-        $sth->finish();
-        
-        print "High-frequency k-mer analysis completed: $result\n";
-    };
-    
-    if ($@) {
-        die "Failed to perform high-frequency k-mer analysis: $@\n";
-    }
-}
 
 sub validate_user_and_permissions {
     my ($dbh, $username) = @_;
@@ -860,57 +850,7 @@ sub undo_highfreq_analysis {
     }
 }
 
-sub load_cache {
-    my ($dbh, $pg_version) = @_;
-    
-    print "Loading k-mer cache...\n";
-    
-    eval {
-        if ($pg_version >= 18) {
-            # PostgreSQL 18+: Use parallel cache
-            my $sth = $dbh->prepare("SELECT kmersearch_parallel_highfreq_kmer_cache_load('kafsss_data', 'seq')");
-            $sth->execute();
-            $sth->finish();
-            print "Parallel k-mer cache loaded.\n";
-        } else {
-            # PostgreSQL 16-17: Use global cache
-            my $sth = $dbh->prepare("SELECT kmersearch_highfreq_kmer_cache_load('kafsss_data', 'seq')");
-            $sth->execute();
-            $sth->finish();
-            print "Global k-mer cache loaded.\n";
-        }
-    };
-    
-    if ($@) {
-        die "Failed to load k-mer cache: $@\n";
-    }
-}
 
-sub free_cache {
-    my ($dbh, $pg_version) = @_;
-    
-    print "Freeing k-mer cache...\n";
-    
-    eval {
-        if ($pg_version >= 18) {
-            # PostgreSQL 18+: Use parallel cache
-            my $sth = $dbh->prepare("SELECT kmersearch_parallel_highfreq_kmer_cache_free('kafsss_data', 'seq')");
-            $sth->execute();
-            $sth->finish();
-            print "Parallel k-mer cache freed.\n";
-        } else {
-            # PostgreSQL 16-17: Use global cache
-            my $sth = $dbh->prepare("SELECT kmersearch_highfreq_kmer_cache_free('kafsss_data', 'seq')");
-            $sth->execute();
-            $sth->finish();
-            print "Global k-mer cache freed.\n";
-        }
-    };
-    
-    if ($@) {
-        die "Failed to free k-mer cache: $@\n";
-    }
-}
 
 sub update_meta_table {
     my ($dbh) = @_;
@@ -958,6 +898,127 @@ SQL
     }
 }
 
+sub load_and_validate_parameters {
+    my ($dbh) = @_;
+    
+    print "Checking for parameters in kmersearch_highfreq_kmer table...\n";
+    
+    # Track which parameters were specified on command line
+    my $kmer_size_specified = defined($kmer_size);
+    my $max_appearance_rate_specified = defined($max_appearance_rate);
+    my $max_appearance_nrow_specified = defined($max_appearance_nrow);
+    my $occur_bitlen_specified = defined($occur_bitlen);
+    
+    # Try to get parameters from kmersearch_highfreq_kmer_meta table
+    my $sth = $dbh->prepare(<<SQL);
+SELECT DISTINCT kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
+FROM kmersearch_highfreq_kmer_meta
+WHERE table_oid = 'kafsss_data'::regclass
+  AND column_name = 'seq'
+SQL
+    
+    eval {
+        $sth->execute();
+        my @rows = ();
+        while (my $row = $sth->fetchrow_hashref()) {
+            push @rows, $row;
+        }
+        $sth->finish();
+        
+        if (@rows == 0) {
+            # No data in kmersearch_highfreq_kmer_meta table
+            print "No parameters found in kmersearch_highfreq_kmer_meta table.\n";
+            
+            # Use defaults if not specified
+            $kmer_size = $kmer_size // $default_kmer_size;
+            $max_appearance_rate = $max_appearance_rate // $default_max_appearance_rate;
+            $max_appearance_nrow = $max_appearance_nrow // $default_max_appearance_nrow;
+            $occur_bitlen = $occur_bitlen // $default_occur_bitlen;
+            
+            print "Using " . ($kmer_size_specified ? "specified" : "default") . " kmer_size: $kmer_size\n";
+            print "Using " . ($max_appearance_rate_specified ? "specified" : "default") . " max_appearance_rate: $max_appearance_rate\n";
+            print "Using " . ($max_appearance_nrow_specified ? "specified" : "default") . " max_appearance_nrow: $max_appearance_nrow\n";
+            print "Using " . ($occur_bitlen_specified ? "specified" : "default") . " occur_bitlen: $occur_bitlen\n";
+            print "Note: High-frequency k-mer exclusion will be disabled (no matching data in kmersearch_highfreq_kmer).\n";
+        } elsif (@rows == 1) {
+            # Found exactly one set of parameters
+            my $row = $rows[0];
+            my $db_kmer_size = $row->{kmer_size};
+            my $db_occur_bitlen = $row->{occur_bitlen};
+            my $db_max_appearance_rate = $row->{max_appearance_rate};
+            my $db_max_appearance_nrow = $row->{max_appearance_nrow};
+            
+            print "Found parameters in kmersearch_highfreq_kmer_meta table:\n";
+            print "  kmer_size: $db_kmer_size\n";
+            print "  occur_bitlen: $db_occur_bitlen\n";
+            print "  max_appearance_rate: $db_max_appearance_rate\n";
+            print "  max_appearance_nrow: $db_max_appearance_nrow\n";
+            
+            # Validate or use database values
+            if ($kmer_size_specified) {
+                if ($kmer_size != $db_kmer_size) {
+                    die "Error: Specified kmer_size ($kmer_size) does not match value in kmersearch_highfreq_kmer_meta table ($db_kmer_size).\n" .
+                        "Please use --kmersize=$db_kmer_size or run kafssfreq again with --kmersize=$kmer_size.\n";
+                }
+            } else {
+                $kmer_size = $db_kmer_size;
+                print "Using kmer_size from database: $kmer_size\n";
+            }
+            
+            if ($occur_bitlen_specified) {
+                if ($occur_bitlen != $db_occur_bitlen) {
+                    die "Error: Specified occur_bitlen ($occur_bitlen) does not match value in kmersearch_highfreq_kmer_meta table ($db_occur_bitlen).\n" .
+                        "Please use --occurbitlen=$db_occur_bitlen or run kafssfreq again with --occurbitlen=$occur_bitlen.\n";
+                }
+            } else {
+                $occur_bitlen = $db_occur_bitlen;
+                print "Using occur_bitlen from database: $occur_bitlen\n";
+            }
+            
+            if ($max_appearance_rate_specified) {
+                if (abs($max_appearance_rate - $db_max_appearance_rate) > 0.0001) {
+                    die "Error: Specified max_appearance_rate ($max_appearance_rate) does not match value in kmersearch_highfreq_kmer_meta table ($db_max_appearance_rate).\n" .
+                        "Please use --maxpappear=$db_max_appearance_rate or run kafssfreq again with --maxpappear=$max_appearance_rate.\n";
+                }
+            } else {
+                $max_appearance_rate = $db_max_appearance_rate;
+                print "Using max_appearance_rate from database: $max_appearance_rate\n";
+            }
+            
+            if ($max_appearance_nrow_specified) {
+                if ($max_appearance_nrow != $db_max_appearance_nrow) {
+                    die "Error: Specified max_appearance_nrow ($max_appearance_nrow) does not match value in kmersearch_highfreq_kmer_meta table ($db_max_appearance_nrow).\n" .
+                        "Please use --maxnappear=$db_max_appearance_nrow or run kafssfreq again with --maxnappear=$max_appearance_nrow.\n";
+                }
+            } else {
+                $max_appearance_nrow = $db_max_appearance_nrow;
+                print "Using max_appearance_nrow from database: $max_appearance_nrow\n";
+            }
+        } else {
+            # Multiple different parameter sets found
+            die "Error: Multiple different parameter sets found in kmersearch_highfreq_kmer_meta table.\n" .
+                "This indicates inconsistent frequency analysis. Please run kafssfreq again to fix this.\n";
+        }
+    };
+    
+    if ($@) {
+        # Error accessing table - use defaults
+        print "Warning: Could not access kmersearch_highfreq_kmer_meta table: $@";
+        print "Using default or specified parameters.\n";
+        
+        $kmer_size = $kmer_size // $default_kmer_size;
+        $max_appearance_rate = $max_appearance_rate // $default_max_appearance_rate;
+        $max_appearance_nrow = $max_appearance_nrow // $default_max_appearance_nrow;
+        $occur_bitlen = $occur_bitlen // $default_occur_bitlen;
+    }
+    
+    # Final validation of parameters
+    die "kmersize must be between 4 and 64\n" unless $kmer_size >= 4 && $kmer_size <= 64;
+    die "maxpappear must be between 0.0 and 1.0\n" unless $max_appearance_rate >= 0.0 && $max_appearance_rate <= 1.0;
+    die "maxnappear must be non-negative\n" unless $max_appearance_nrow >= 0;
+    die "occurbitlen must be between 0 and 16\n" unless $occur_bitlen >= 0 && $occur_bitlen <= 16;
+}
+
 sub check_if_partitioned {
     my ($dbh, $table_name) = @_;
     
@@ -1003,133 +1064,9 @@ SQL
     return @partitions;
 }
 
-sub check_cache_loaded {
-    my ($dbh, $pg_version) = @_;
-    
-    my $loaded = 0;
-    
-    # Try to check if cache is loaded by examining pg_kmersearch system catalogs
-    # Since there's no direct status function, we check if the cache is in use
-    eval {
-        if ($pg_version >= 18) {
-            # For PostgreSQL 18+, check if parallel cache is in use
-            # We can try to query the system view or check GUC settings
-            my $sth = $dbh->prepare("SHOW kmersearch.force_use_parallel_highfreq_kmer_cache");
-            $sth->execute();
-            my ($setting) = $sth->fetchrow_array();
-            $sth->finish();
-            
-            # If it's set to true, cache might be loaded
-            if ($setting && $setting eq 'on') {
-                # Try to verify by checking system catalog
-                my $check_sth = $dbh->prepare(<<SQL);
-SELECT COUNT(*) 
-FROM kmersearch_parallel_highfreq_kmer_cache
-WHERE table_oid = 'kafsss_data'::regclass
-AND column_name = 'seq'
-SQL
-                eval {
-                    $check_sth->execute();
-                    my ($count) = $check_sth->fetchrow_array();
-                    $check_sth->finish();
-                    $loaded = ($count > 0) ? 1 : 0;
-                };
-                if ($@) {
-                    # Table might not exist or be accessible
-                    $loaded = 0;
-                }
-            }
-        }
-    };
-    
-    if ($@) {
-        # If check fails, assume not loaded
-        print "Could not check cache status: $@\n" if $verbose;
-        $loaded = 0;
-    }
-    
-    return $loaded;
-}
 
-sub create_partitioned_indexes {
-    my ($dbh, $pg_version, $op_class, $tablespace, $parent_cache_loaded, $highfreq_kmer_count) = @_;
-    
-    print "Creating indexes on partitioned table...\n";
-    
-    # Get list of partitions
-    my @partitions = get_partitions($dbh, 'kafsss_data');
-    
-    if (@partitions == 0) {
-        print "No partitions found for kafsss_data table.\n";
-        return;
-    }
-    
-    print "Found " . scalar(@partitions) . " partitions.\n";
-    
-    # Determine number of parallel workers
-    my $max_workers = $numthreads > 0 ? $numthreads : 4;
-    my $num_workers = (@partitions < $max_workers) ? @partitions : $max_workers;
-    
-    print "Using $num_workers worker processes for parallel index creation.\n";
-    
-    # Create indexes on partitions in parallel
-    create_partition_indexes_parallel(\@partitions, $num_workers, $op_class, $tablespace, 
-                                      $pg_version, $highfreq_kmer_count);
-    
-    # After all partition indexes are created, create indexes on parent table
-    print "Creating indexes on parent table 'kafsss_data'...\n";
-    
-    # Create seq column GIN index on parent table
-    my $seq_index_name = 'idx_kafsss_data_seq_gin';
-    print "Creating parent index '$seq_index_name' with operator class '$op_class'...\n";
-    my $seq_sql = "CREATE INDEX $seq_index_name ON kafsss_data USING gin(seq $op_class)";
-    if ($tablespace) {
-        $seq_sql .= " TABLESPACE \"$tablespace\"";
-    }
-    
-    eval {
-        $dbh->do($seq_sql);
-        print "Parent index '$seq_index_name' created successfully.\n";
-    };
-    if ($@) {
-        die "Failed to create parent index '$seq_index_name': $@\n";
-    }
-    
-    # Create subset column GIN index on parent table
-    my $subset_index_name = 'idx_kafsss_data_subset_gin';
-    print "Creating parent index '$subset_index_name'...\n";
-    my $subset_sql = "CREATE INDEX $subset_index_name ON kafsss_data USING gin(subset)";
-    if ($tablespace) {
-        $subset_sql .= " TABLESPACE \"$tablespace\"";
-    }
-    
-    eval {
-        $dbh->do($subset_sql);
-        print "Parent index '$subset_index_name' created successfully.\n";
-    };
-    if ($@) {
-        die "Failed to create parent index '$subset_index_name': $@\n";
-    }
-    
-    # Create seqid column GIN index on parent table
-    my $seqid_index_name = 'idx_kafsss_data_seqid_gin';
-    print "Creating parent index '$seqid_index_name'...\n";
-    my $seqid_sql = "CREATE INDEX $seqid_index_name ON kafsss_data USING gin(seqid)";
-    if ($tablespace) {
-        $seqid_sql .= " TABLESPACE \"$tablespace\"";
-    }
-    
-    eval {
-        $dbh->do($seqid_sql);
-        print "Parent index '$seqid_index_name' created successfully.\n";
-    };
-    if ($@) {
-        die "Failed to create parent index '$seqid_index_name': $@\n";
-    }
-}
-
-sub create_partition_indexes_parallel {
-    my ($partitions_ref, $num_workers, $op_class, $tablespace, $pg_version, $highfreq_kmer_count) = @_;
+sub create_partition_indexes_for_column {
+    my ($partitions_ref, $num_workers, $column, $tablespace, $pg_version, $use_highfreq_cache) = @_;
     my @partitions = @$partitions_ref;
     
     use POSIX ':sys_wait_h';
@@ -1148,13 +1085,13 @@ sub create_partition_indexes_parallel {
                 die "Failed to fork worker process: $!\n";
             } elsif ($pid == 0) {
                 # Child process
-                create_partition_index_worker($partition, $op_class, $tablespace, 
-                                             $pg_version, $highfreq_kmer_count);
+                create_single_partition_index($partition, $column, $tablespace, 
+                                             $pg_version, $use_highfreq_cache);
                 exit 0;
             } else {
                 # Parent process
                 $active_workers{$pid} = $partition;
-                print "Started worker PID $pid for partition '$partition'\n";
+                print "Started worker PID $pid for partition '$partition' column '$column->{name}'\n";
             }
         }
         
@@ -1178,8 +1115,8 @@ sub create_partition_indexes_parallel {
     }
 }
 
-sub create_partition_index_worker {
-    my ($partition_name, $op_class, $tablespace, $pg_version, $highfreq_kmer_count) = @_;
+sub create_single_partition_index {
+    my ($partition_name, $column, $tablespace, $pg_version, $use_highfreq_cache) = @_;
     
     # Each worker creates its own database connection
     my $password = $ENV{PGPASSWORD} || '';
@@ -1189,7 +1126,7 @@ sub create_partition_index_worker {
         RaiseError => 1,
         AutoCommit => 1,
         pg_enable_utf8 => 1
-    }) or die "Worker cannot connect to database '$database_name': $DBI::errstr\n";
+    }) or die "[Worker $$] Cannot connect to database '$database_name': $DBI::errstr\n";
     
     # Set GUC variables in worker
     eval {
@@ -1198,20 +1135,16 @@ sub create_partition_index_worker {
         $worker_dbh->do("SET kmersearch.max_appearance_rate = $max_appearance_rate");
         $worker_dbh->do("SET kmersearch.max_appearance_nrow = $max_appearance_nrow");
         
-        if ($highfreq_kmer_count > 0) {
+        if ($use_highfreq_cache) {
             $worker_dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
-            if ($pg_version >= 18) {
-                $worker_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
-            }
+            $worker_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
         } else {
             $worker_dbh->do("SET kmersearch.preclude_highfreq_kmer = false");
-            if ($pg_version >= 18) {
-                $worker_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
-            }
+            $worker_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
         }
     };
     if ($@) {
-        die "Worker failed to set GUC variables: $@\n";
+        die "[Worker $$] Failed to set GUC variables: $@\n";
     }
     
     # Set memory parameters
@@ -1221,57 +1154,51 @@ sub create_partition_index_worker {
         $worker_dbh->do("SET temp_buffers = '$temporarybuffer'");
     };
     if ($@) {
-        die "Worker failed to set memory parameters: $@\n";
+        die "[Worker $$] Failed to set memory parameters: $@\n";
     }
     
-    # Create indexes on partition
-    print "[Worker $$] Creating indexes on partition '$partition_name'...\n";
+    # Verify cache is loaded if needed (for seq column only)
+    if ($use_highfreq_cache && $column->{name} eq 'seq') {
+        eval {
+            my $load_sth = $worker_dbh->prepare("SELECT kmersearch_parallel_highfreq_kmer_cache_load('kafsss_data', 'seq')");
+            $load_sth->execute();
+            my ($load_result) = $load_sth->fetchrow_array();
+            $load_sth->finish();
+            
+            if (!$load_result) {
+                die "kmersearch_parallel_highfreq_kmer_cache_load() returned false\n";
+            }
+            print "[Worker $$] Verified high-frequency k-mer cache is loaded.\n";
+        };
+        if ($@) {
+            die "[Worker $$] Failed to verify cache load: $@\n";
+        }
+    }
     
-    # Create seq column GIN index
-    my $seq_index_name = "idx_${partition_name}_seq_gin";
-    my $seq_sql = "CREATE INDEX IF NOT EXISTS $seq_index_name ON $partition_name USING gin(seq $op_class)";
+    # Create index on partition
+    my $index_name = "idx_${partition_name}_$column->{name}_gin";
+    my $index_sql = "CREATE INDEX IF NOT EXISTS $index_name ON $partition_name USING gin($column->{name}";
+    
+    # Add operator class for seq column
+    if ($column->{op_class}) {
+        $index_sql .= " $column->{op_class}";
+    }
+    $index_sql .= ")";
+    
     if ($tablespace) {
-        $seq_sql .= " TABLESPACE \"$tablespace\"";
+        $index_sql .= " TABLESPACE \"$tablespace\"";
     }
+    
+    print "[Worker $$] Creating index '$index_name' on partition '$partition_name'...\n";
     
     eval {
-        $worker_dbh->do($seq_sql);
-        print "[Worker $$] Index '$seq_index_name' created.\n";
+        $worker_dbh->do($index_sql);
+        print "[Worker $$] Index '$index_name' created successfully.\n";
     };
     if ($@) {
-        die "[Worker $$] Failed to create index '$seq_index_name': $@\n";
-    }
-    
-    # Create subset column GIN index
-    my $subset_index_name = "idx_${partition_name}_subset_gin";
-    my $subset_sql = "CREATE INDEX IF NOT EXISTS $subset_index_name ON $partition_name USING gin(subset)";
-    if ($tablespace) {
-        $subset_sql .= " TABLESPACE \"$tablespace\"";
-    }
-    
-    eval {
-        $worker_dbh->do($subset_sql);
-        print "[Worker $$] Index '$subset_index_name' created.\n";
-    };
-    if ($@) {
-        die "[Worker $$] Failed to create index '$subset_index_name': $@\n";
-    }
-    
-    # Create seqid column GIN index
-    my $seqid_index_name = "idx_${partition_name}_seqid_gin";
-    my $seqid_sql = "CREATE INDEX IF NOT EXISTS $seqid_index_name ON $partition_name USING gin(seqid)";
-    if ($tablespace) {
-        $seqid_sql .= " TABLESPACE \"$tablespace\"";
-    }
-    
-    eval {
-        $worker_dbh->do($seqid_sql);
-        print "[Worker $$] Index '$seqid_index_name' created.\n";
-    };
-    if ($@) {
-        die "[Worker $$] Failed to create index '$seqid_index_name': $@\n";
+        die "[Worker $$] Failed to create index '$index_name': $@\n";
     }
     
     $worker_dbh->disconnect();
-    print "[Worker $$] Completed indexing partition '$partition_name'.\n";
+    print "[Worker $$] Completed indexing column '$column->{name}' on partition '$partition_name'.\n";
 }

@@ -24,11 +24,11 @@ my $default_user = $ENV{PGUSER} || getpwuid($<);          # PostgreSQL username
 my $default_password = $ENV{PGPASSWORD} || '';             # PostgreSQL password
 my $default_database = '';       # Set default database name here (e.g., 'mykmersearch')
 my $default_subset = '';      # Set default subset name here (e.g., 'bacteria')
-my $default_maxnseq = 1000;      # Set default maxnseq value here
+my $default_maxnseq = 0;         # Set default maxnseq value here (0 = unlimited)
 my $maxmaxnseq = 100000;         # Maximum allowed maxnseq value
 my $default_minscore = 1;        # Set default minscore value here
 my $default_minpsharedkmer = 0.5;  # Set default minimum shared k-mer rate here
-my $default_mode = 'matchscore'; # Set default mode (minimum, matchscore, maximum)
+my $default_mode = 'sequence';   # Set default mode (minimum, matchscore, sequence, maximum)
 my $default_listen_port = 8080;  # HTTP server listen port
 my $default_numthreads = 5;      # Number of parallel request processing threads
 
@@ -1113,16 +1113,14 @@ sub perform_database_search {
         die "Database validation failed: $@";
     }
     
-    # Get k-mer size from kafsss_meta table
-    my $kmer_size = $self->get_kmer_size_from_meta($dbh);
+    # Get metadata from kafsss_meta table
+    my $metadata = $self->get_metadata_from_meta($dbh);
     
-    # Set k-mer size for pg_kmersearch
-    eval {
-        $dbh->do("SET kmersearch.kmer_size = $kmer_size");
-    };
-    if ($@) {
-        die "Failed to set k-mer size: $@";
-    }
+    # Check for matching high-frequency k-mer data
+    my $use_highfreq_cache = $self->check_highfreq_kmer_exists($dbh, $metadata);
+    
+    # Set kmersearch GUC variables
+    $self->set_kmersearch_guc_variables($dbh, $metadata, $use_highfreq_cache);
     
     # Set minimum score if specified
     if (defined $request->{minscore} && $request->{minscore} ne '') {
@@ -1144,8 +1142,9 @@ sub perform_database_search {
         }
     }
     
-    # Get ovllen from kafsss_meta table for query validation
-    my $ovllen = $self->get_ovllen_from_meta($dbh);
+    # Get ovllen and kmer_size for query validation
+    my $ovllen = $metadata->{ovllen};
+    my $kmer_size = $metadata->{kmer_size};
     
     # Validate query sequence
     my $validation_result = $self->validate_query_sequence($request->{queryseq}, $ovllen, $kmer_size);
@@ -1299,47 +1298,134 @@ sub build_search_response {
     return $response;
 }
 
-sub get_kmer_size_from_meta {
+sub get_metadata_from_meta {
     my ($self, $dbh) = @_;
     
-    # Query kafsss_meta table to get kmer_size value
-    my $sth = $dbh->prepare("SELECT kmer_size FROM kafsss_meta LIMIT 1");
+    # Query kafsss_meta table to get all metadata
+    my $sth = $dbh->prepare(<<SQL);
+SELECT ovllen, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
+FROM kafsss_meta LIMIT 1
+SQL
+    
     eval {
         $sth->execute();
-        my ($kmer_size) = $sth->fetchrow_array();
+        my ($ovllen, $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow) = $sth->fetchrow_array();
         $sth->finish();
         
-        if (defined $kmer_size) {
-            return $kmer_size;
-        } else {
-            die "No k-mer index found. Please run kafssindex to create indexes first.\n";
+        if (!defined $ovllen || !defined $kmer_size) {
+            die "No metadata found in kafsss_meta table. Please run kafssindex to create indexes first.\n";
         }
+        
+        return {
+            ovllen => $ovllen,
+            kmer_size => $kmer_size,
+            occur_bitlen => $occur_bitlen,
+            max_appearance_rate => $max_appearance_rate,
+            max_appearance_nrow => $max_appearance_nrow
+        };
     };
     
     if ($@) {
-        die "Failed to retrieve kmer_size from kafsss_meta table: $@\n";
+        die "Failed to retrieve metadata from kafsss_meta table: $@\n";
     }
 }
 
-sub get_ovllen_from_meta {
-    my ($self, $dbh) = @_;
+sub check_highfreq_kmer_exists {
+    my ($self, $dbh, $metadata) = @_;
     
-    # Query kafsss_meta table to get ovllen value
-    my $sth = $dbh->prepare("SELECT ovllen FROM kafsss_meta LIMIT 1");
+    # Check if matching high-frequency k-mer data exists
+    my $check_sql = <<SQL;
+SELECT COUNT(*) 
+FROM kmersearch_highfreq_kmer_meta 
+WHERE table_oid = 'kafsss_data'::regclass 
+  AND column_name = 'seq'
+  AND kmer_size = ?
+  AND occur_bitlen = ?
+  AND max_appearance_rate = ?
+  AND max_appearance_nrow = ?
+SQL
+    
+    my $use_highfreq_cache = 0;
+    
     eval {
-        $sth->execute();
-        my ($ovllen) = $sth->fetchrow_array();
+        my $sth = $dbh->prepare($check_sql);
+        $sth->execute(
+            $metadata->{kmer_size},
+            $metadata->{occur_bitlen} // 0,
+            $metadata->{max_appearance_rate} // 0,
+            $metadata->{max_appearance_nrow} // 0
+        );
+        my ($count) = $sth->fetchrow_array();
         $sth->finish();
         
-        if (defined $ovllen) {
-            return $ovllen;
-        } else {
-            die "No ovllen value found in kafsss_meta table\n";
-        }
+        $use_highfreq_cache = ($count > 0) ? 1 : 0;
     };
     
     if ($@) {
-        die "Failed to retrieve ovllen from kafsss_meta table: $@\n";
+        warn "Warning: Failed to check kmersearch_highfreq_kmer_meta table: $@\n";
+    }
+    
+    return $use_highfreq_cache;
+}
+
+sub set_kmersearch_guc_variables {
+    my ($self, $dbh, $metadata, $use_highfreq_cache) = @_;
+    
+    # Set k-mer size
+    eval {
+        $dbh->do("SET kmersearch.kmer_size = $metadata->{kmer_size}");
+    };
+    if ($@) {
+        die "Failed to set k-mer size: $@";
+    }
+    
+    # Set occur_bitlen if available
+    if (defined $metadata->{occur_bitlen}) {
+        eval {
+            $dbh->do("SET kmersearch.occur_bitlen = $metadata->{occur_bitlen}");
+        };
+        if ($@) {
+            warn "Warning: Failed to set occur_bitlen: $@\n";
+        }
+    }
+    
+    # Set max_appearance_rate if available
+    if (defined $metadata->{max_appearance_rate}) {
+        eval {
+            $dbh->do("SET kmersearch.max_appearance_rate = $metadata->{max_appearance_rate}");
+        };
+        if ($@) {
+            warn "Warning: Failed to set max_appearance_rate: $@\n";
+        }
+    }
+    
+    # Set max_appearance_nrow if available
+    if (defined $metadata->{max_appearance_nrow}) {
+        eval {
+            $dbh->do("SET kmersearch.max_appearance_nrow = $metadata->{max_appearance_nrow}");
+        };
+        if ($@) {
+            warn "Warning: Failed to set max_appearance_nrow: $@\n";
+        }
+    }
+    
+    # Set high-frequency k-mer exclusion parameters
+    if ($use_highfreq_cache) {
+        eval {
+            $dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
+            $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
+        };
+        if ($@) {
+            warn "Warning: Failed to enable high-frequency k-mer exclusion: $@\n";
+        }
+    } else {
+        eval {
+            $dbh->do("SET kmersearch.preclude_highfreq_kmer = false");
+            $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
+        };
+        if ($@) {
+            warn "Warning: Failed to disable high-frequency k-mer exclusion: $@\n";
+        }
     }
 }
 

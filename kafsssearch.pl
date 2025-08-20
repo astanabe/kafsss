@@ -17,9 +17,9 @@ my $VERSION = "1.0.0";
 my $default_host = $ENV{PGHOST} || 'localhost';
 my $default_port = $ENV{PGPORT} || 5432;
 my $default_user = $ENV{PGUSER} || getpwuid($<);
-my $default_maxnseq = 1000;
+my $default_maxnseq = 0;
 my $default_numthreads = 1;
-my $default_mode = 'matchscore';
+my $default_mode = 'sequence';
 my $default_minpsharedkmer = 0.5;
 my $default_minscore = 1;
 
@@ -150,6 +150,9 @@ verify_database_structure($dbh);
 my $metadata = get_metadata_from_meta($dbh);
 print "Retrieved metadata - k-mer size: $metadata->{kmer_size}, ovllen: $metadata->{ovllen}\n";
 
+# Check for matching high-frequency k-mer data
+my $use_highfreq_cache = check_highfreq_kmer_exists($dbh, $metadata);
+
 # Set k-mer size for pg_kmersearch
 print "Setting k-mer size to $metadata->{kmer_size}...\n";
 eval {
@@ -191,6 +194,29 @@ if (defined $metadata->{max_appearance_nrow}) {
     };
     if ($@) {
         warn "Warning: Failed to set max_appearance_nrow: $@\n";
+    }
+}
+
+# Set high-frequency k-mer exclusion parameters
+if ($use_highfreq_cache) {
+    print "Enabling high-frequency k-mer exclusion...\n";
+    eval {
+        $dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
+        $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
+        print "High-frequency k-mer exclusion enabled.\n";
+    };
+    if ($@) {
+        warn "Warning: Failed to enable high-frequency k-mer exclusion: $@\n";
+    }
+} else {
+    print "Disabling high-frequency k-mer exclusion (no matching data)...\n";
+    eval {
+        $dbh->do("SET kmersearch.preclude_highfreq_kmer = false");
+        $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
+        print "High-frequency k-mer exclusion disabled.\n";
+    };
+    if ($@) {
+        warn "Warning: Failed to disable high-frequency k-mer exclusion: $@\n";
     }
 }
 
@@ -743,6 +769,25 @@ sub process_single_sequence {
         }
     }
     
+    # Set high-frequency k-mer exclusion parameters (using metadata from parent)
+    if ($metadata->{use_highfreq_cache}) {
+        eval {
+            $child_dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
+            $child_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
+        };
+        if ($@) {
+            warn "Warning: Failed to enable high-frequency k-mer exclusion in child process: $@\n";
+        }
+    } else {
+        eval {
+            $child_dbh->do("SET kmersearch.preclude_highfreq_kmer = false");
+            $child_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
+        };
+        if ($@) {
+            warn "Warning: Failed to disable high-frequency k-mer exclusion in child process: $@\n";
+        }
+    }
+    
     # Set minimum score if specified
     if (defined $minscore) {
         eval {
@@ -1003,8 +1048,56 @@ SQL
         kmer_size => $kmer_size,
         occur_bitlen => $occur_bitlen,
         max_appearance_rate => $max_appearance_rate,
-        max_appearance_nrow => $max_appearance_nrow
+        max_appearance_nrow => $max_appearance_nrow,
+        use_highfreq_cache => 0  # Will be updated by check_highfreq_kmer_exists
     };
+}
+
+sub check_highfreq_kmer_exists {
+    my ($dbh, $metadata) = @_;
+    
+    # Check if matching high-frequency k-mer data exists
+    my $check_sql = <<SQL;
+SELECT COUNT(*) 
+FROM kmersearch_highfreq_kmer_meta 
+WHERE table_oid = 'kafsss_data'::regclass 
+  AND column_name = 'seq'
+  AND kmer_size = ?
+  AND occur_bitlen = ?
+  AND max_appearance_rate = ?
+  AND max_appearance_nrow = ?
+SQL
+    
+    my $use_highfreq_cache = 0;
+    
+    eval {
+        my $sth = $dbh->prepare($check_sql);
+        $sth->execute(
+            $metadata->{kmer_size},
+            $metadata->{occur_bitlen} // 0,
+            $metadata->{max_appearance_rate} // 0,
+            $metadata->{max_appearance_nrow} // 0
+        );
+        my ($count) = $sth->fetchrow_array();
+        $sth->finish();
+        
+        if ($count > 0) {
+            print "Found matching high-frequency k-mer metadata in kmersearch_highfreq_kmer_meta table.\n";
+            $use_highfreq_cache = 1;
+        } else {
+            print "No matching high-frequency k-mer metadata found in kmersearch_highfreq_kmer_meta table.\n";
+        }
+    };
+    
+    if ($@) {
+        warn "Warning: Failed to check kmersearch_highfreq_kmer_meta table: $@\n";
+        warn "Proceeding without high-frequency k-mer exclusion.\n";
+    }
+    
+    # Update metadata with the cache flag
+    $metadata->{use_highfreq_cache} = $use_highfreq_cache;
+    
+    return $use_highfreq_cache;
 }
 
 sub get_ovllen_from_meta {
