@@ -175,7 +175,7 @@ if (($outfmt eq 'FASTA' || $outfmt eq 'multiFASTA') && $mode ne 'sequence' && $m
 
 # Validate outfmt and output file combination
 if (($outfmt eq 'multiTSV' || $outfmt eq 'FASTA' || $outfmt eq 'multiFASTA') &&
-    ($output_file eq '-' || $output_file eq 'stdout' || $output_file eq 'STDOUT')) {
+    ($global_output_file eq '-' || $global_output_file eq 'stdout' || $global_output_file eq 'STDOUT')) {
     die "Output format '$outfmt' requires a file prefix, cannot use stdout\n";
 }
 
