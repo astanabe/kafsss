@@ -46,6 +46,7 @@ my $retrydelay = $default_retrydelay;
 my $failedserverexclusion = $default_failedserverexclusion;
 my $mode = $default_mode;
 my $outfmt = $default_outfmt;
+my $seqid_db = '';
 my $netrc_file = '';
 my $http_user = '';
 my $http_password = '';
@@ -71,6 +72,7 @@ GetOptions(
     'failedserverexclusion=i' => \$failedserverexclusion,
     'mode=s' => \$mode,
     'outfmt=s' => \$outfmt,
+    'seqid_db=s' => \$seqid_db,
     'netrc-file=s' => \$netrc_file,
     'http-user=s' => \$http_user,
     'http-password=s' => \$http_password,
@@ -164,13 +166,52 @@ $mode = $normalized_mode;
 # Validate outfmt
 my $normalized_outfmt = normalize_outfmt($outfmt);
 if (!$normalized_outfmt) {
-    die "Invalid outfmt: $outfmt. Must be 'TSV', 'multiTSV', 'FASTA', or 'multiFASTA'\n";
+    die "Invalid outfmt: $outfmt. Must be 'TSV', 'multiTSV', 'FASTA', 'multiFASTA', or 'BLASTDB'\n";
 }
 $outfmt = $normalized_outfmt;
 
 # Validate outfmt and mode combination
-if (($outfmt eq 'FASTA' || $outfmt eq 'multiFASTA') && $mode ne 'sequence' && $mode ne 'maximum') {
-    die "FASTA output format requires --mode=sequence or --mode=maximum\n";
+if (($outfmt eq 'FASTA' || $outfmt eq 'multiFASTA') && $mode ne 'sequence') {
+    die "FASTA output format requires --mode=sequence\n";
+}
+
+# Validate BLASTDB output format requirements
+if ($outfmt eq 'BLASTDB') {
+    if ($mode ne 'minimum' && $mode ne 'sequence') {
+        die "BLASTDB output format requires --mode=minimum or --mode=sequence\n";
+    }
+    if ($mode eq 'minimum' && !$seqid_db) {
+        die "BLASTDB output format with --mode=minimum requires --seqid_db option\n";
+    }
+    if ($global_output_file eq '-' || $global_output_file eq 'stdout' || $global_output_file eq 'STDOUT') {
+        die "BLASTDB output format requires a file prefix, cannot use stdout\n";
+    }
+    # Check for existing files with ${output_file}_*.* pattern
+    my @existing_files = glob("${global_output_file}_*.*");
+    if (@existing_files > 0) {
+        die "Output files already exist: " . join(', ', @existing_files) . "\n" .
+            "Please remove existing files or use a different output prefix.\n";
+    }
+    # Check required BLAST+ tools availability
+    if ($mode eq 'minimum') {
+        # Check blastdb_aliastool availability
+        my $version_output = `blastdb_aliastool -version 2>&1`;
+        my $exit_code = $? >> 8;
+        if ($exit_code != 0 || $version_output !~ /blastdb_aliastool:\s+[\d\.]+/) {
+            die "blastdb_aliastool is not available or not working properly.\n" .
+                "Version check failed: $version_output\n" .
+                "Please install BLAST+ tools or check PATH.\n";
+        }
+    } elsif ($mode eq 'sequence') {
+        # Check makeblastdb availability
+        my $version_output = `makeblastdb -version 2>&1`;
+        my $exit_code = $? >> 8;
+        if ($exit_code != 0 || $version_output !~ /makeblastdb:\s+[\d\.]+/) {
+            die "makeblastdb is not available or not working properly.\n" .
+                "Version check failed: $version_output\n" .
+                "Please install BLAST+ tools or check PATH.\n";
+        }
+    }
 }
 
 # Validate outfmt and output file combination
@@ -273,11 +314,24 @@ if ($outfmt eq 'TSV') {
     $output_handles->{prefix} = $global_output_file;
     $output_handles->{format} = $outfmt;
     $output_handles->{mode} = $mode;
+} elsif ($outfmt eq 'BLASTDB') {
+    # BLAST database output - uses multiTSV or multiFASTA internally
+    $output_handles->{prefix} = $global_output_file;
+    $output_handles->{format} = 'BLASTDB';
+    $output_handles->{mode} = $mode;
+    $output_handles->{seqid_db} = $seqid_db;
+    $output_handles->{query_numbers} = [];  # Track query numbers for post-processing
 }
 
 # Process sequences with parallel streaming
 print STDERR "Starting parallel processing with $numthreads threads...\n" if $verbose;
 my $result = process_sequences_parallel_streaming(@global_input_files, $output_handles);
+
+# Post-processing for BLASTDB format
+if ($outfmt eq 'BLASTDB' && $output_handles->{query_numbers} && @{$output_handles->{query_numbers}} > 0) {
+    print STDERR "Creating BLAST databases...\n";
+    create_blastdb_files($output_handles);
+}
 
 print STDERR "Processing completed successfully.\n";
 print STDERR "Total results: " . $result->{results} . "\n";
@@ -1041,7 +1095,8 @@ Other options:
   --minpsharedkmer=REAL  Minimum percentage of shared k-mers (0.0-1.0, default: 0.5)
   --numthreads=INT  Number of parallel threads (default: 1, currently unused for async)
   --mode=MODE       Output mode: minimum, matchscore, sequence, maximum (default: matchscore)
-  --outfmt=FORMAT   Output format: TSV, multiTSV, FASTA, multiFASTA (default: TSV)
+  --outfmt=FORMAT   Output format: TSV, multiTSV, FASTA, multiFASTA, BLASTDB (default: TSV)
+  --seqid_db=DB     BLAST database name for BLASTDB output with --mode=minimum
   --maxnretry_total=INT Maximum total retries for all operations (default: 100)
   --retrydelay=INT  Retry delay in seconds (default: 10, currently unused)
   --failedserverexclusion=INT Exclude failed servers for N seconds (default: infinite, -1)
@@ -1095,11 +1150,28 @@ Output format (--outfmt option):
              Same columns as TSV format
   
   FASTA/multiFASTA: Multiple FASTA files, one per query sequence
-             (requires --mode=sequence or --mode=maximum)
+             (requires --mode=sequence)
              Output files: output_prefix_N.fasta (N = query sequence number)
              Format: >seqid1[^Aseqid2[^A...]]
                      sequence_data
              Multiple seqids are separated by SOH (^A) character
+
+  BLASTDB:   Create BLAST database files for each query sequence
+             Requires --mode=minimum or --mode=sequence
+
+             With --mode=minimum (requires --seqid_db):
+               Creates alias database referencing existing BLAST database
+               Output files per query:
+                 - output_prefix_N.tsv     (TSV results)
+                 - output_prefix_N.acclist (accession list)
+                 - output_prefix_N.bsl     (binary seqid list)
+                 - output_prefix_N.nal     (nucleotide alias database)
+
+             With --mode=sequence:
+               Creates new BLAST database from FASTA sequences
+               Output files per query:
+                 - output_prefix_N.fasta   (FASTA sequences)
+                 - output_prefix_N.n*      (BLAST database files)
 
 Authentication:
   For servers protected by HTTP Basic authentication, use one of these options:
@@ -1138,9 +1210,15 @@ Examples:
   
   # Multiple files with authentication
   kafsssearchclient --server=https://server.com --netrc-file=.netrc file1.fasta file2.fasta results.tsv
-  
+
   # Server with default database
   kafsssearchclient --server=localhost:8080 'queries/*.fasta' results.tsv
+
+  # BLAST database output with alias (requires existing BLAST database)
+  kafsssearchclient --server=localhost --db=mydb --mode=minimum --outfmt=BLASTDB --seqid_db=nt query.fasta results
+
+  # BLAST database output with new database creation
+  kafsssearchclient --server=localhost --db=mydb --mode=sequence --outfmt=BLASTDB query.fasta results
 
 EOF
 }
@@ -1488,7 +1566,7 @@ sub expand_input_files {
 sub normalize_outfmt {
     my ($outfmt) = @_;
     return '' unless defined $outfmt;
-    
+
     # Normalize format names (case-insensitive)
     my %format_aliases = (
         'tsv' => 'TSV',
@@ -1498,22 +1576,24 @@ sub normalize_outfmt {
         'fasta' => 'FASTA',
         'FASTA' => 'FASTA',
         'multifasta' => 'multiFASTA',
-        'multiFASTA' => 'multiFASTA'
+        'multiFASTA' => 'multiFASTA',
+        'blastdb' => 'BLASTDB',
+        'BLASTDB' => 'BLASTDB'
     );
-    
+
     my $normalized = $format_aliases{$outfmt};
     return $normalized || '';
 }
 
 sub write_results_to_file_multi {
     my ($results, $query_number, $output_handles) = @_;
-    
+
     return unless @$results > 0;
-    
+
     my $format = $output_handles->{format};
     my $prefix = $output_handles->{prefix};
     my $mode = $output_handles->{mode};
-    
+
     if ($format eq 'multiTSV') {
         # Write to individual TSV file
         my $filename = "${prefix}_${query_number}.tsv";
@@ -1523,29 +1603,22 @@ sub write_results_to_file_multi {
         }
         close $fh;
     } elsif ($format eq 'FASTA' || $format eq 'multiFASTA') {
-        # Write to individual FASTA file
+        # Write to individual FASTA file (requires --mode=sequence)
         my $filename = "${prefix}_${query_number}.fasta";
         open my $fh, '>', $filename or die "Cannot open output file '$filename': $!\n";
-        
+
         # Parse TSV results and group by sequence
         my %seq_to_ids = ();
         for my $result (@$results) {
             my @fields = split /\t/, $result;
             my $seqid_str = $fields[2];  # Third column is seqid list
-            my $sequence = '';
-            
-            # Find sequence based on mode
-            if ($mode eq 'sequence') {
-                $sequence = $fields[3] if defined $fields[3];  # Fourth column in sequence mode
-            } elsif ($mode eq 'maximum') {
-                $sequence = $fields[4] if defined $fields[4];  # Fifth column in maximum mode
-            }
-            
+            my $sequence = $fields[3] if defined $fields[3];  # Fourth column in sequence mode
+
             if ($sequence) {
                 push @{$seq_to_ids{$sequence}}, $seqid_str;
             }
         }
-        
+
         # Write FASTA entries
         for my $sequence (keys %seq_to_ids) {
             my @seqids = @{$seq_to_ids{$sequence}};
@@ -1555,21 +1628,54 @@ sub write_results_to_file_multi {
             print $fh "$sequence\n";
         }
         close $fh;
+    } elsif ($format eq 'BLASTDB') {
+        # Track query number for post-processing
+        push @{$output_handles->{query_numbers}}, $query_number;
+
+        if ($mode eq 'minimum') {
+            # Write TSV file (same as multiTSV)
+            my $filename = "${prefix}_${query_number}.tsv";
+            open my $fh, '>', $filename or die "Cannot open output file '$filename': $!\n";
+            for my $result (@$results) {
+                print $fh "$result\n";
+            }
+            close $fh;
+        } elsif ($mode eq 'sequence') {
+            # Write FASTA file for makeblastdb
+            my $filename = "${prefix}_${query_number}.fasta";
+            open my $fh, '>', $filename or die "Cannot open output file '$filename': $!\n";
+
+            for my $result (@$results) {
+                my @fields = split /\t/, $result;
+                my $seqid_str = $fields[2];  # Third column is seqid list
+                my $sequence = $fields[3] if defined $fields[3];  # Fourth column in sequence mode
+
+                if ($sequence && $seqid_str) {
+                    # Use the first seqid as FASTA header (without position suffix)
+                    my @seqids = split(/,/, $seqid_str);
+                    my $first_seqid = $seqids[0];
+                    $first_seqid =~ s/:\d+:\d+$//;  # Remove position suffix
+                    print $fh ">$first_seqid\n";
+                    print $fh "$sequence\n";
+                }
+            }
+            close $fh;
+        }
     }
 }
 
 sub process_temp_file_for_multifile {
     my ($temp_file, $query_number, $output_handles) = @_;
-    
+
     open my $temp_fh, '<', $temp_file or die "Cannot open temporary file '$temp_file': $!\n";
-    
+
     my $format = undef;
     my $mode = undef;
     my @results = ();
-    
+
     while (my $line = <$temp_fh>) {
         chomp $line;
-        
+
         # Check for format header
         if ($line =~ /^#FORMAT:(.+)$/) {
             $format = $1;
@@ -1579,22 +1685,24 @@ sub process_temp_file_for_multifile {
             $mode = $1;
             next;
         }
-        
+
         # Store result line as-is
         push @results, $line;
     }
     close $temp_fh;
-    
+
     # If format info was in temp file, use it; otherwise use from output_handles
     $format ||= $output_handles->{format};
     $mode ||= $output_handles->{mode};
-    
+
     # Write results to appropriate output file
     if (@results > 0) {
         write_results_to_file_multi(\@results, $query_number, {
             format => $format,
             prefix => $output_handles->{prefix},
-            mode => $mode
+            mode => $mode,
+            query_numbers => $output_handles->{query_numbers},
+            seqid_db => $output_handles->{seqid_db}
         });
     }
 }
@@ -1663,9 +1771,39 @@ sub parse_netrc_file {
     return %credentials;
 }
 
+sub get_server_list {
+    # Return server URLs from --server and --serverlist options
+    my @servers = ();
+
+    # Parse servers from --server option
+    if ($server) {
+        my @servers_from_option = split /,/, $server;
+        for my $s (@servers_from_option) {
+            $s =~ s/^\s+|\s+$//g;  # Trim whitespace
+            push @servers, $s if $s;
+        }
+    }
+
+    # Parse servers from --serverlist file
+    if ($serverlist && -f $serverlist) {
+        open my $fh, '<', $serverlist or warn "Cannot open server list file '$serverlist': $!\n";
+        if ($fh) {
+            while (my $line = <$fh>) {
+                chomp $line;
+                $line =~ s/^\s+|\s+$//g;  # Trim whitespace
+                next if $line eq '' || $line =~ /^#/;  # Skip empty lines and comments
+                push @servers, $line;
+            }
+            close $fh;
+        }
+    }
+
+    return @servers;
+}
+
 sub validate_server_connectivity {
     print "Validating server connectivity...\n";
-    
+
     # Get server list
     my @servers = get_server_list();
     
@@ -1721,6 +1859,152 @@ sub validate_server_connectivity {
     if ($reachable_servers == 0) {
         die "Error: No servers are reachable. Please check your server configuration and network connectivity.\n";
     }
-    
+
     print "Server connectivity validation completed ($reachable_servers/" . scalar(@servers) . " servers reachable).\n";
+}
+
+sub create_blastdb_files {
+    my ($output_handles) = @_;
+
+    my $prefix = $output_handles->{prefix};
+    my $mode = $output_handles->{mode};
+    my $seqid_db = $output_handles->{seqid_db};
+    my @query_numbers = @{$output_handles->{query_numbers}};
+
+    print STDERR "Post-processing " . scalar(@query_numbers) . " query results...\n";
+
+    # Fork child processes for parallel execution
+    my %children = ();
+    my $max_parallel = $numthreads > 0 ? $numthreads : 1;
+
+    for my $query_number (@query_numbers) {
+        # Wait if we have too many children
+        while (scalar(keys %children) >= $max_parallel) {
+            my $finished_pid = waitpid(-1, 0);
+            if ($finished_pid > 0) {
+                my $exit_code = $? >> 8;
+                my $qn = delete $children{$finished_pid};
+                if ($exit_code != 0) {
+                    warn "Warning: BLASTDB creation for query $qn failed with exit code $exit_code\n";
+                } else {
+                    print STDERR "  Completed BLASTDB for query $qn\n";
+                }
+            }
+        }
+
+        my $pid = fork();
+        if (!defined $pid) {
+            die "Cannot fork for BLASTDB creation: $!\n";
+        } elsif ($pid == 0) {
+            # Child process
+            if ($mode eq 'minimum') {
+                create_blastdb_from_tsv($prefix, $query_number, $seqid_db);
+            } elsif ($mode eq 'sequence') {
+                create_blastdb_from_fasta($prefix, $query_number);
+            }
+            exit 0;
+        } else {
+            # Parent process
+            $children{$pid} = $query_number;
+        }
+    }
+
+    # Wait for remaining children
+    while (scalar(keys %children) > 0) {
+        my $finished_pid = waitpid(-1, 0);
+        if ($finished_pid > 0) {
+            my $exit_code = $? >> 8;
+            my $qn = delete $children{$finished_pid};
+            if ($exit_code != 0) {
+                warn "Warning: BLASTDB creation for query $qn failed with exit code $exit_code\n";
+            } else {
+                print STDERR "  Completed BLASTDB for query $qn\n";
+            }
+        }
+    }
+
+    print STDERR "BLASTDB creation completed.\n";
+}
+
+sub create_blastdb_from_tsv {
+    my ($prefix, $query_number, $seqid_db) = @_;
+
+    my $tsv_file = "${prefix}_${query_number}.tsv";
+    my $acclist_file = "${prefix}_${query_number}.acclist";
+    my $bsl_file = "${prefix}_${query_number}.bsl";
+    my $nal_file = "${prefix}_${query_number}";
+
+    # Step 1: Extract accession numbers from TSV file
+    my %acc = ();
+    open my $tsv_fh, '<', $tsv_file or die "Cannot open TSV file '$tsv_file': $!\n";
+    while (my $line = <$tsv_fh>) {
+        chomp $line;
+        my @fields = split /\t/, $line;
+        next unless @fields >= 3;
+        my $seqidlist = $fields[2];  # Third column is seqid list
+        foreach my $seqid (split(/,/, $seqidlist)) {
+            $seqid =~ s/:\d+:\d+$//;  # Remove position suffix
+            $acc{$seqid} = 1;
+        }
+    }
+    close $tsv_fh;
+
+    # Step 2: Write accession list file
+    open my $acc_fh, '>', $acclist_file or die "Cannot open accession list file '$acclist_file': $!\n";
+    for my $accession (sort keys %acc) {
+        print $acc_fh "$accession\n";
+    }
+    close $acc_fh;
+
+    # Step 3: Create BSL file using blastdb_aliastool
+    my @bsl_cmd = (
+        'blastdb_aliastool',
+        '-seqid_dbtype', 'nucl',
+        '-seqid_db', $seqid_db,
+        '-seqid_file_in', $acclist_file,
+        '-seqid_title', "${prefix}_${query_number}",
+        '-seqid_file_out', $bsl_file
+    );
+    my $bsl_result = system(@bsl_cmd);
+    if ($bsl_result != 0) {
+        die "blastdb_aliastool (BSL) failed for query $query_number: exit code " . ($bsl_result >> 8) . "\n";
+    }
+
+    # Step 4: Create NAL file using blastdb_aliastool
+    my @nal_cmd = (
+        'blastdb_aliastool',
+        '-dbtype', 'nucl',
+        '-db', $seqid_db,
+        '-seqidlist', $bsl_file,
+        '-out', $nal_file,
+        '-title', "${prefix}_${query_number}"
+    );
+    my $nal_result = system(@nal_cmd);
+    if ($nal_result != 0) {
+        die "blastdb_aliastool (NAL) failed for query $query_number: exit code " . ($nal_result >> 8) . "\n";
+    }
+}
+
+sub create_blastdb_from_fasta {
+    my ($prefix, $query_number) = @_;
+
+    my $fasta_file = "${prefix}_${query_number}.fasta";
+    my $db_name = "${prefix}_${query_number}";
+
+    # Create BLASTDB using makeblastdb
+    my @cmd = (
+        'makeblastdb',
+        '-dbtype', 'nucl',
+        '-input_type', 'fasta',
+        '-hash_index',
+        '-parse_seqids',
+        '-max_file_sz', '4G',
+        '-in', $fasta_file,
+        '-out', $db_name,
+        '-title', "${prefix}_${query_number}"
+    );
+    my $result = system(@cmd);
+    if ($result != 0) {
+        die "makeblastdb failed for query $query_number: exit code " . ($result >> 8) . "\n";
+    }
 }

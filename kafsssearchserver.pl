@@ -845,8 +845,9 @@ sub execute_search_job {
             pg_enable_utf8 => 1
         });
         
-        # Get kmer_size and store for response building
-        $self->{current_kmer_size} = $self->get_kmer_size_from_meta($pg_dbh);
+        # Get metadata and store kmer_size for response building
+        my $metadata = $self->get_metadata_from_meta($pg_dbh);
+        $self->{current_kmer_size} = $metadata->{kmer_size};
         
         # Perform the search (reusing existing search logic)
         my $results = $self->perform_database_search($pg_dbh, $request);
