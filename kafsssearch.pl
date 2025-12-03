@@ -22,6 +22,7 @@ my $default_numthreads = 1;
 my $default_mode = 'sequence';
 my $default_minpsharedkmer = 0.5;
 my $default_minscore = 1;
+my $default_outfmt = 'TSV';
 
 # Command line options
 my $host = $default_host;
@@ -34,6 +35,7 @@ my $minscore = $default_minscore;
 my $minpsharedkmer = $default_minpsharedkmer;
 my $numthreads = $default_numthreads;
 my $mode = $default_mode;
+my $outfmt = $default_outfmt;
 my $verbose = 0;
 my $help = 0;
 
@@ -49,6 +51,7 @@ GetOptions(
     'minpsharedkmer=f' => \$minpsharedkmer,
     'numthreads=i' => \$numthreads,
     'mode=s' => \$mode,
+    'outfmt=s' => \$outfmt,
     'verbose|v' => \$verbose,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
@@ -90,6 +93,24 @@ if (!$normalized_mode) {
 }
 $mode = $normalized_mode;
 
+# Validate outfmt
+my $normalized_outfmt = normalize_outfmt($outfmt);
+if (!$normalized_outfmt) {
+    die "Invalid outfmt: $outfmt. Must be 'TSV', 'multiTSV', 'FASTA', or 'multiFASTA'\n";
+}
+$outfmt = $normalized_outfmt;
+
+# Validate outfmt and mode combination
+if (($outfmt eq 'FASTA' || $outfmt eq 'multiFASTA') && $mode ne 'sequence' && $mode ne 'maximum') {
+    die "FASTA output format requires --mode=sequence or --mode=maximum\n";
+}
+
+# Validate outfmt and output file combination
+if (($outfmt eq 'multiTSV' || $outfmt eq 'FASTA' || $outfmt eq 'multiFASTA') &&
+    ($output_file eq '-' || $output_file eq 'stdout' || $output_file eq 'STDOUT')) {
+    die "Output format '$outfmt' requires a file prefix, cannot use stdout\n";
+}
+
 print "kafsssearch version $VERSION\n";
 print "Input files (" . scalar(@input_files) . "):\n";
 for my $i (0..$#input_files) {
@@ -106,6 +127,7 @@ print "Min score: $minscore\n";
 print "Min shared k-mer rate: $minpsharedkmer\n";
 print "Number of threads: $numthreads\n";
 print "Mode: $mode\n";
+print "Output format: $outfmt\n";
 
 # Connect to PostgreSQL server first for validation
 my $password = $ENV{PGPASSWORD} || '';
@@ -255,8 +277,20 @@ if ($numthreads > 1) {
     $dbh = undef;  # Clear the handle to prevent accidental use
 }
 
-# Open output file
-my $output_fh = open_output_file($output_file);
+# Prepare output handles based on format
+my $output_handles = {};
+my $output_fh = undef;
+
+if ($outfmt eq 'TSV') {
+    # Single TSV file
+    $output_fh = open_output_file($output_file);
+} elsif ($outfmt eq 'multiTSV' || $outfmt eq 'FASTA' || $outfmt eq 'multiFASTA') {
+    # Multiple files - handles will be created per query
+    # Store the prefix for later use
+    $output_handles->{prefix} = $output_file;
+    $output_handles->{format} = $outfmt;
+    $output_handles->{mode} = $mode;
+}
 
 # Process FASTA sequences from multiple files
 print "Processing FASTA sequences...\n" if $verbose;
@@ -273,10 +307,10 @@ for my $i (0..$#input_files) {
     my $file_results;
     if ($numthreads == 1) {
         # Single-threaded processing
-        $file_results = process_sequences_single_threaded($input_fh, $output_fh, $dbh, $total_queries, $metadata);
+        $file_results = process_sequences_single_threaded($input_fh, $output_fh, $dbh, $total_queries, $metadata, $output_handles);
     } else {
         # Multi-threaded processing with process pool
-        $file_results = process_sequences_parallel_streaming($input_fh, $output_fh, $total_queries, $metadata);
+        $file_results = process_sequences_parallel_streaming($input_fh, $output_fh, $total_queries, $metadata, $output_handles);
     }
     
     $total_results += $file_results->{results};
@@ -288,7 +322,18 @@ for my $i (0..$#input_files) {
 }
 
 # Close files and database connection
-close_output_file($output_fh, $output_file);
+if ($output_fh) {
+    close_output_file($output_fh, $output_file);
+}
+# Close any remaining output handles for multi-file formats
+if ($output_handles && ref($output_handles) eq 'HASH') {
+    for my $key (keys %$output_handles) {
+        next if $key eq 'prefix' || $key eq 'format' || $key eq 'mode';
+        if (ref($output_handles->{$key}) eq 'GLOB' || ref($output_handles->{$key}) eq 'REF') {
+            close($output_handles->{$key});
+        }
+    }
+}
 if (defined $dbh) {
     $dbh->disconnect();
 }
@@ -333,6 +378,7 @@ Other options:
   --minpsharedkmer=REAL  Minimum percentage of shared k-mers (0.0-1.0, default: 0.5)
   --numthreads=INT  Number of parallel threads (default: 1)
   --mode=MODE       Output mode: minimum, matchscore, sequence, maximum (default: matchscore)
+  --outfmt=FORMAT   Output format: TSV, multiTSV, FASTA, multiFASTA (default: TSV)
   --verbose, -v     Show detailed processing messages (default: false)
   --help, -h        Show this help message
 
@@ -342,13 +388,24 @@ Environment variables:
   PGUSER           PostgreSQL username
   PGPASSWORD       PostgreSQL password
 
-Output format:
-  Tab-separated values with columns:
-  1. Query sequence number (1-based integer)
-  2. Query FASTA label
-  3. Comma-separated seqid list from seqid column
-  4. Match score from kmersearch_matchscore function (only in matchscore and maximum modes)
-  5. Sequence data (only in sequence and maximum modes)
+Output format (--outfmt option):
+  TSV:       Single tab-separated values file with columns:
+             1. Query sequence number (1-based integer)
+             2. Query FASTA label
+             3. Comma-separated seqid list from seqid column
+             4. Match score (only in matchscore and maximum modes)
+             5. Sequence data (only in sequence and maximum modes)
+  
+  multiTSV:  Multiple TSV files, one per query sequence
+             Output files: output_prefix_N.tsv (N = query sequence number)
+             Same columns as TSV format
+  
+  FASTA/multiFASTA: Multiple FASTA files, one per query sequence
+             (requires --mode=sequence or --mode=maximum)
+             Output files: output_prefix_N.fasta (N = query sequence number)
+             Format: >seqid1[^Aseqid2[^A...]]
+                     sequence_data
+             Multiple seqids are separated by SOH (^A) character
 
 Examples:
   # Single file
@@ -531,7 +588,7 @@ sub read_next_fasta_entry {
 }
 
 sub process_sequences_single_threaded {
-    my ($input_fh, $output_fh, $dbh, $query_offset, $metadata) = @_;
+    my ($input_fh, $output_fh, $dbh, $query_offset, $metadata, $output_handles) = @_;
     $query_offset ||= 0;
     
     my $total_results = 0;
@@ -543,9 +600,16 @@ sub process_sequences_single_threaded {
         my $results = search_sequence_with_validation($fasta_entry, $dbh, $global_query_number, $metadata->{ovllen}, $mode, $metadata->{kmer_size});
         
         if (@$results > 0) {
-            for my $result (@$results) {
-                print $output_fh join("\t", @$result) . "\n";
-                $total_results++;
+            if ($output_handles && $output_handles->{format}) {
+                # Multi-file output
+                write_results_to_file($results, $global_query_number, $output_handles);
+                $total_results += scalar(@$results);
+            } else {
+                # Single file output (TSV)
+                for my $result (@$results) {
+                    print $output_fh join("\t", @$result) . "\n";
+                    $total_results++;
+                }
             }
             print "Processed query $global_query_number: " . $fasta_entry->{label} . 
                   " (" . scalar(@$results) . " results)\n";
@@ -559,7 +623,7 @@ sub process_sequences_single_threaded {
 }
 
 sub process_sequences_parallel_streaming {
-    my ($input_fh, $output_fh, $query_offset, $metadata) = @_;
+    my ($input_fh, $output_fh, $query_offset, $metadata, $output_handles) = @_;
     $query_offset ||= 0;
     
     my %active_children = ();  # pid => {query_number, temp_file}
@@ -588,7 +652,7 @@ sub process_sequences_parallel_streaming {
                 die "Cannot fork: $!\n";
             } elsif ($pid == 0) {
                 # Child process
-                process_single_sequence($fasta_entry, $global_query_number, $temp_file, $metadata);
+                process_single_sequence($fasta_entry, $global_query_number, $temp_file, $metadata, $output_handles);
                 exit 0;
             } else {
                 # Parent process
@@ -644,15 +708,22 @@ sub process_sequences_parallel_streaming {
             my $result_info = delete $completed_results{$next_output_query};
             
             if ($result_info->{file} && -f $result_info->{file}) {
-                # Stream results directly from temp file to output file (memory efficient)
-                open my $temp_fh, '<', $result_info->{file} or die "Cannot open temporary file '$result_info->{file}': $!\n";
-                while (my $line = <$temp_fh>) {
-                    chomp $line;
-                    print $output_fh "$line\n";
-                    $total_results++;
+                if ($output_handles && $output_handles->{format}) {
+                    # Multi-file output - read and write to separate files
+                    process_temp_file_for_multifile($result_info->{file}, $next_output_query, $output_handles);
+                    $total_results += $result_info->{count};
+                    unlink $result_info->{file};
+                } else {
+                    # Single file output - stream directly
+                    open my $temp_fh, '<', $result_info->{file} or die "Cannot open temporary file '$result_info->{file}': $!\n";
+                    while (my $line = <$temp_fh>) {
+                        chomp $line;
+                        print $output_fh "$line\n";
+                        $total_results++;
+                    }
+                    close $temp_fh;
+                    unlink $result_info->{file};
                 }
-                close $temp_fh;
-                unlink $result_info->{file};
             }
             $next_output_query++;
         }
@@ -709,15 +780,22 @@ sub process_sequences_parallel_streaming {
         my $result_info = delete $completed_results{$next_output_query};
         
         if ($result_info->{file} && -f $result_info->{file}) {
-            # Stream results directly from temp file to output file (memory efficient)
-            open my $temp_fh, '<', $result_info->{file} or die "Cannot open temporary file '$result_info->{file}': $!\n";
-            while (my $line = <$temp_fh>) {
-                chomp $line;
-                print $output_fh "$line\n";
-                $total_results++;
+            if ($output_handles && $output_handles->{format}) {
+                # Multi-file output - read and write to separate files
+                process_temp_file_for_multifile($result_info->{file}, $next_output_query, $output_handles);
+                $total_results += $result_info->{count};
+                unlink $result_info->{file};
+            } else {
+                # Single file output - stream directly
+                open my $temp_fh, '<', $result_info->{file} or die "Cannot open temporary file '$result_info->{file}': $!\n";
+                while (my $line = <$temp_fh>) {
+                    chomp $line;
+                    print $output_fh "$line\n";
+                    $total_results++;
+                }
+                close $temp_fh;
+                unlink $result_info->{file};
             }
-            close $temp_fh;
-            unlink $result_info->{file};
         }
         $next_output_query++;
     }
@@ -727,7 +805,7 @@ sub process_sequences_parallel_streaming {
 }
 
 sub process_single_sequence {
-    my ($fasta_entry, $query_number, $temp_file, $metadata) = @_;
+    my ($fasta_entry, $query_number, $temp_file, $metadata, $output_handles) = @_;
     
     # Create new database connection for child process
     my $password = $ENV{PGPASSWORD} || '';
@@ -825,6 +903,12 @@ sub process_single_sequence {
     
     # Write results to temporary file
     open my $temp_fh, '>', $temp_file or die "Cannot open temporary file '$temp_file': $!\n";
+    if ($output_handles && $output_handles->{format}) {
+        # For multi-file formats, store results in a format that can be parsed later
+        # Store format info on first line
+        print $temp_fh "#FORMAT:" . $output_handles->{format} . "\n";
+        print $temp_fh "#MODE:" . $output_handles->{mode} . "\n";
+    }
     for my $result (@$results) {
         print $temp_fh join("\t", @$result) . "\n";
     }
@@ -1349,8 +1433,8 @@ sub validate_database_schema {
         }
     }
     
-    # Check if database has k-mer indexes
-    my $sth = $dbh->prepare("SELECT 1 FROM pg_indexes WHERE tablename = 'kafsss_data' AND indexname LIKE '%_kmer_%' LIMIT 1");
+    # Check if database has k-mer indexes (seq column GIN index)
+    my $sth = $dbh->prepare("SELECT 1 FROM pg_indexes WHERE tablename = 'kafsss_data' AND indexname = 'idx_kafsss_data_seq_gin' LIMIT 1");
     $sth->execute();
     my $has_kmer_index = $sth->fetchrow_array();
     $sth->finish();
@@ -1361,4 +1445,121 @@ sub validate_database_schema {
     }
     
     print "Database schema validation completed.\n";
+}
+
+sub normalize_outfmt {
+    my ($outfmt) = @_;
+    return '' unless defined $outfmt;
+    
+    # Normalize format names (case-insensitive)
+    my %format_aliases = (
+        'tsv' => 'TSV',
+        'TSV' => 'TSV',
+        'multitsv' => 'multiTSV',
+        'multiTSV' => 'multiTSV',
+        'fasta' => 'FASTA',
+        'FASTA' => 'FASTA',
+        'multifasta' => 'multiFASTA',
+        'multiFASTA' => 'multiFASTA'
+    );
+    
+    my $normalized = $format_aliases{$outfmt};
+    return $normalized || '';
+}
+
+sub write_results_to_file {
+    my ($results, $query_number, $output_handles) = @_;
+    
+    return unless @$results > 0;
+    
+    my $format = $output_handles->{format};
+    my $prefix = $output_handles->{prefix};
+    my $mode = $output_handles->{mode};
+    
+    if ($format eq 'multiTSV') {
+        # Write to individual TSV file
+        my $filename = "${prefix}_${query_number}.tsv";
+        open my $fh, '>', $filename or die "Cannot open output file '$filename': $!\n";
+        for my $result (@$results) {
+            print $fh join("\t", @$result) . "\n";
+        }
+        close $fh;
+    } elsif ($format eq 'FASTA' || $format eq 'multiFASTA') {
+        # Write to individual FASTA file
+        my $filename = "${prefix}_${query_number}.fasta";
+        open my $fh, '>', $filename or die "Cannot open output file '$filename': $!\n";
+        
+        # Group results by sequence (in case multiple results have the same sequence)
+        my %seq_to_ids = ();
+        for my $result (@$results) {
+            # Extract seqid list and sequence from result
+            my $seqid_str = $result->[2];  # Third column is seqid list
+            my $sequence = '';
+            
+            # Find sequence based on mode
+            if ($mode eq 'sequence') {
+                $sequence = $result->[3];  # Fourth column in sequence mode
+            } elsif ($mode eq 'maximum') {
+                $sequence = $result->[4];  # Fifth column in maximum mode
+            }
+            
+            if ($sequence) {
+                push @{$seq_to_ids{$sequence}}, $seqid_str;
+            }
+        }
+        
+        # Write FASTA entries
+        for my $sequence (keys %seq_to_ids) {
+            my @seqids = @{$seq_to_ids{$sequence}};
+            # Replace comma separators within each seqid string with SOH (^A)
+            my @converted_seqids = map { s/,/\cA/g; $_ } @seqids;
+            # Join seqids with SOH (^A) character
+            my $header = join("\cA", @converted_seqids);
+            print $fh ">$header\n";
+            print $fh "$sequence\n";
+        }
+        close $fh;
+    }
+}
+
+sub process_temp_file_for_multifile {
+    my ($temp_file, $query_number, $output_handles) = @_;
+    
+    open my $temp_fh, '<', $temp_file or die "Cannot open temporary file '$temp_file': $!\n";
+    
+    my $format = undef;
+    my $mode = undef;
+    my @results = ();
+    
+    while (my $line = <$temp_fh>) {
+        chomp $line;
+        
+        # Check for format header
+        if ($line =~ /^#FORMAT:(.+)$/) {
+            $format = $1;
+            next;
+        }
+        if ($line =~ /^#MODE:(.+)$/) {
+            $mode = $1;
+            next;
+        }
+        
+        # Parse TSV result line
+        my @fields = split /\t/, $line;
+        push @results, \@fields;
+    }
+    close $temp_fh;
+    
+    # If format info was in temp file, use it; otherwise use from output_handles
+    $format ||= $output_handles->{format};
+    $mode ||= $output_handles->{mode};
+    
+    # Write results to appropriate output file
+    if (@results > 0) {
+        write_results_to_file(\@results, $query_number, {
+            format => $format,
+            prefix => $output_handles->{prefix},
+            mode => $mode
+        });
+    }
 }
