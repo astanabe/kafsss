@@ -423,7 +423,7 @@ SQL
     
     # Create indexes on parent table
     print "\nCreating indexes on parent table 'kafsss_data'...\n";
-    create_parent_table_indexes($dbh, $op_class, $tablespace, $use_highfreq_cache);
+    create_parent_table_indexes($dbh, $op_class, $tablespace);
     
     # Do not free cache - PostgreSQL will handle it automatically on disconnect
     # This prevents interfering with other processes that may be using the cache
@@ -435,45 +435,12 @@ SQL
 }
 
 sub create_parent_table_indexes {
-    my ($dbh, $op_class, $tablespace, $use_highfreq_cache) = @_;
-    
-    # Set GUC variables for parent process
-    if ($use_highfreq_cache) {
-        eval {
-            $dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
-            $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
-            print "Enabled high-frequency k-mer exclusion for parent table.\n";
-        };
-        if ($@) {
-            die "Failed to set GUC variables for parent table: $@\n";
-        }
-        
-        # Verify cache is loaded
-        eval {
-            my $load_sth = $dbh->prepare("SELECT kmersearch_parallel_highfreq_kmer_cache_load('kafsss_data', 'seq')");
-            $load_sth->execute();
-            my ($load_result) = $load_sth->fetchrow_array();
-            $load_sth->finish();
-            
-            if (!$load_result) {
-                die "kmersearch_parallel_highfreq_kmer_cache_load() returned false\n";
-            }
-            print "Verified high-frequency k-mer cache is loaded.\n";
-        };
-        if ($@) {
-            die "Failed to verify cache load: $@\n";
-        }
-    } else {
-        eval {
-            $dbh->do("SET kmersearch.preclude_highfreq_kmer = false");
-            $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
-            print "Disabled high-frequency k-mer exclusion for parent table.\n";
-        };
-        if ($@) {
-            die "Failed to set GUC variables for parent table: $@\n";
-        }
-    }
-    
+    my ($dbh, $op_class, $tablespace) = @_;
+
+    # Note: Parent table indexes (subset, seqid) do not use k-mer search,
+    # so high-frequency k-mer cache settings are not needed here.
+    # The seq column index is created on partition tables, not on parent table.
+
     # Create subset column GIN index on parent table
     my $subset_index_name = 'idx_kafsss_data_subset_gin';
     print "Creating parent index '$subset_index_name'...\n";
@@ -1212,7 +1179,7 @@ sub create_single_partition_index {
         
         if ($use_highfreq_cache) {
             $worker_dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
-            $worker_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
+            $worker_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
         } else {
             $worker_dbh->do("SET kmersearch.preclude_highfreq_kmer = false");
             $worker_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
@@ -1233,13 +1200,30 @@ sub create_single_partition_index {
         $worker_dbh->disconnect() if $worker_dbh;
         die "[Worker $$] Failed to set memory parameters: $@\n";
     }
-    
-    # Note: Cache should be loaded by parent process or kafsspreload before running kafssindex
-    # Worker processes should NOT try to load cache themselves
-    if ($use_highfreq_cache && $column->{name} eq 'seq') {
-        print "[Worker $$] Using pre-loaded high-frequency k-mer cache.\n";
+
+    # Disable parallel index build to prevent exceeding numthreads
+    # (PostgreSQL 18+ supports parallel GIN index builds, but we already parallelize at partition level)
+    eval {
+        $worker_dbh->do("SET max_parallel_maintenance_workers = 0");
+    };
+    if ($@) {
+        $worker_dbh->disconnect() if $worker_dbh;
+        die "[Worker $$] Failed to set max_parallel_maintenance_workers: $@\n";
     }
-    
+
+    # Load high-frequency k-mer cache in each worker process
+    if ($use_highfreq_cache && $column->{name} eq 'seq') {
+        print "[Worker $$] Loading high-frequency k-mer cache...\n";
+        eval {
+            $worker_dbh->do("SELECT kmersearch_highfreq_kmer_cache_load('kafsss_data', 'seq')");
+        };
+        if ($@) {
+            $worker_dbh->disconnect() if $worker_dbh;
+            die "[Worker $$] Failed to load high-frequency k-mer cache: $@\n";
+        }
+        print "[Worker $$] High-frequency k-mer cache loaded.\n";
+    }
+
     # Create index on partition with proper error handling
     my $index_name = "idx_${partition_name}_$column->{name}_gin";
     my $index_sql = "CREATE INDEX IF NOT EXISTS $index_name ON $partition_name USING gin($column->{name}";
