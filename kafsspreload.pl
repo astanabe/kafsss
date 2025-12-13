@@ -8,7 +8,7 @@ use POSIX qw(strftime);
 use File::Basename;
 
 # Version number
-my $VERSION = "1.0.0";
+my $VERSION = "__VERSION__";
 
 # Default values
 my $default_host = $ENV{PGHOST} || 'localhost';
@@ -402,33 +402,57 @@ sub print_log {
 
 sub load_and_validate_parameters {
     print_log("Checking for parameters in kmersearch_highfreq_kmer table...");
-    
+
     # Track which parameters were specified on command line
     my $kmer_size_specified = defined($kmer_size);
     my $max_appearance_rate_specified = defined($max_appearance_rate);
     my $max_appearance_nrow_specified = defined($max_appearance_nrow);
     my $occur_bitlen_specified = defined($occur_bitlen);
-    
-    # Try to get parameters from kmersearch_highfreq_kmer_meta table
-    my $sth = $dbh->prepare(<<SQL);
-SELECT DISTINCT kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
+
+    # Build query based on whether kmer_size is specified
+    # This supports multiple kmer_size entries in kmersearch_highfreq_kmer_meta
+    my $sql;
+    my @bind_params;
+    if ($kmer_size_specified) {
+        # Filter by specified kmer_size
+        $sql = <<SQL;
+SELECT kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
+FROM kmersearch_highfreq_kmer_meta
+WHERE table_oid = ?::regclass
+  AND column_name = ?
+  AND kmer_size = ?
+SQL
+        @bind_params = ($table_name, $column_name, $kmer_size);
+    } else {
+        # Get all entries for this table/column
+        $sql = <<SQL;
+SELECT kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
 FROM kmersearch_highfreq_kmer_meta
 WHERE table_oid = ?::regclass
   AND column_name = ?
 SQL
-    
+        @bind_params = ($table_name, $column_name);
+    }
+
+    my $sth = $dbh->prepare($sql);
+
     eval {
-        $sth->execute($table_name, $column_name);
+        $sth->execute(@bind_params);
         my @rows = ();
         while (my $row = $sth->fetchrow_hashref()) {
             push @rows, $row;
         }
         $sth->finish();
-        
+
         if (@rows == 0) {
             # No data in kmersearch_highfreq_kmer_meta table
-            die "Error: No high-frequency k-mer data found in kmersearch_highfreq_kmer_meta table for $table_name.$column_name.\n" .
-                "Please run kafssfreq first to generate high-frequency k-mer data.\n";
+            if ($kmer_size_specified) {
+                die "Error: No high-frequency k-mer data found in kmersearch_highfreq_kmer_meta table for $table_name.$column_name with kmer_size=$kmer_size.\n" .
+                    "Please run kafssfreq first to generate high-frequency k-mer data with this kmer_size.\n";
+            } else {
+                die "Error: No high-frequency k-mer data found in kmersearch_highfreq_kmer_meta table for $table_name.$column_name.\n" .
+                    "Please run kafssfreq first to generate high-frequency k-mer data.\n";
+            }
         } elsif (@rows == 1) {
             # Found exactly one set of parameters
             my $row = $rows[0];
@@ -436,24 +460,24 @@ SQL
             my $db_occur_bitlen = $row->{occur_bitlen};
             my $db_max_appearance_rate = $row->{max_appearance_rate};
             my $db_max_appearance_nrow = $row->{max_appearance_nrow};
-            
+
             print_log("Found parameters in kmersearch_highfreq_kmer_meta table:");
             print_log("  kmer_size: $db_kmer_size");
             print_log("  occur_bitlen: $db_occur_bitlen");
             print_log("  max_appearance_rate: $db_max_appearance_rate");
             print_log("  max_appearance_nrow: $db_max_appearance_nrow");
-            
+
             # Validate or use database values
             if ($kmer_size_specified) {
+                # Already filtered by kmer_size, just verify consistency
                 if ($kmer_size != $db_kmer_size) {
-                    die "Error: Specified kmer_size ($kmer_size) does not match value in kmersearch_highfreq_kmer_meta table ($db_kmer_size).\n" .
-                        "Please use --kmersize=$db_kmer_size or run kafssfreq again with --kmersize=$kmer_size.\n";
+                    die "Internal error: kmer_size mismatch despite filtering.\n";
                 }
             } else {
                 $kmer_size = $db_kmer_size;
                 print_log("Using kmer_size from database: $kmer_size");
             }
-            
+
             if ($occur_bitlen_specified) {
                 if ($occur_bitlen != $db_occur_bitlen) {
                     die "Error: Specified occur_bitlen ($occur_bitlen) does not match value in kmersearch_highfreq_kmer_meta table ($db_occur_bitlen).\n" .
@@ -463,7 +487,7 @@ SQL
                 $occur_bitlen = $db_occur_bitlen;
                 print_log("Using occur_bitlen from database: $occur_bitlen");
             }
-            
+
             if ($max_appearance_rate_specified) {
                 if (abs($max_appearance_rate - $db_max_appearance_rate) > 0.0001) {
                     die "Error: Specified max_appearance_rate ($max_appearance_rate) does not match value in kmersearch_highfreq_kmer_meta table ($db_max_appearance_rate).\n" .
@@ -473,7 +497,7 @@ SQL
                 $max_appearance_rate = $db_max_appearance_rate;
                 print_log("Using max_appearance_rate from database: $max_appearance_rate");
             }
-            
+
             if ($max_appearance_nrow_specified) {
                 if ($max_appearance_nrow != $db_max_appearance_nrow) {
                     die "Error: Specified max_appearance_nrow ($max_appearance_nrow) does not match value in kmersearch_highfreq_kmer_meta table ($db_max_appearance_nrow).\n" .
@@ -485,11 +509,19 @@ SQL
             }
         } else {
             # Multiple different parameter sets found
-            die "Error: Multiple different parameter sets found in kmersearch_highfreq_kmer_meta table.\n" .
-                "This indicates inconsistent frequency analysis. Please run kafssfreq again to fix this.\n";
+            if ($kmer_size_specified) {
+                # This shouldn't happen if kmer_size is part of primary key
+                die "Error: Multiple entries found for kmer_size=$kmer_size in kmersearch_highfreq_kmer_meta table.\n" .
+                    "This indicates database inconsistency. Please run kafssfreq again to fix this.\n";
+            } else {
+                # Multiple kmer_size entries exist - user must specify which one to use
+                my @kmer_sizes = map { $_->{kmer_size} } @rows;
+                die "Error: Multiple kmer_size entries found in kmersearch_highfreq_kmer_meta table: " . join(", ", @kmer_sizes) . "\n" .
+                    "Please specify which kmer_size to use with --kmersize option.\n";
+            }
         }
     };
-    
+
     if ($@) {
         die "Failed to load parameters from kmersearch_highfreq_kmer_meta table: $@";
     }
@@ -497,8 +529,26 @@ SQL
     # Final validation of parameters
     die "kmersize must be between 4 and 64\n" unless $kmer_size >= 4 && $kmer_size <= 64;
     die "maxpappear must be between 0.0 and 1.0\n" unless $max_appearance_rate >= 0.0 && $max_appearance_rate <= 1.0;
+    validate_max_appearance_rate_precision($max_appearance_rate);
     die "maxnappear must be non-negative\n" unless $max_appearance_nrow >= 0;
     die "occurbitlen must be between 0 and 16\n" unless $occur_bitlen >= 0 && $occur_bitlen <= 16;
+}
+
+# Validate that max_appearance_rate has at most 3 decimal places
+sub validate_max_appearance_rate_precision {
+    my ($rate) = @_;
+    return unless defined $rate;
+
+    # Convert to string and check decimal places
+    my $rate_str = sprintf("%.10f", $rate);
+    $rate_str =~ s/0+$//;  # Remove trailing zeros
+    $rate_str =~ s/\.$//;  # Remove trailing decimal point
+
+    if ($rate_str =~ /\.(\d{4,})/) {
+        die "Error: --maxpappear can only have up to 3 decimal places (e.g., 0.050, 0.125).\n" .
+            "Value '$rate' has too many decimal places.\n" .
+            "This is required because the GIN index name encodes the rate as a 4-digit integer (rate * 1000).\n";
+    }
 }
 
 sub set_guc_variables {

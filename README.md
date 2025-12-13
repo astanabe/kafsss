@@ -9,6 +9,7 @@ A comprehensive toolkit for DNA sequence analysis using k-mer similarity search 
 - **Asynchronous Processing**: Job-based search with SQLite job management, automatic polling, and resume capability
 - **Load Balancing**: Multi-server support with failover, retry logic, and round-robin distribution
 - **Multiple Input Formats**: FASTA, compressed files (.gz, .bz2, .xz, .zst), BLAST databases, wildcard patterns
+- **Multiple Output Formats**: TSV, multi-file TSV, FASTA, BLASTDB (creates BLAST databases directly)
 - **Multiple Deployment Options**: Standalone HTTP, FastCGI, and PSGI servers with production-ready scaling
 - **Flexible Authentication**: Support for .netrc files and HTTP Basic authentication
 - **Advanced Job Management**: Resume, cancel, and monitor jobs with persistent storage

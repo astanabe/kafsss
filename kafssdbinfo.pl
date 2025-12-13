@@ -10,7 +10,7 @@ use Sys::Hostname;
 use File::Basename;
 
 # Version number
-my $VERSION = "1.0.0";
+my $VERSION = "__VERSION__";
 
 # Default values
 my $default_host = $ENV{PGHOST} || 'localhost';
@@ -102,10 +102,10 @@ unless ($table_count > 0) {
     exit 1;
 }
 
-# Get metadata from kafsss_meta table (including new kmer-related columns)
-$sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow FROM kafsss_meta LIMIT 1");
+# Get metadata from kafsss_meta table (including kmer-related columns)
+$sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow, preclude_highfreq_kmer, seq_index_name FROM kafsss_meta LIMIT 1");
 $sth->execute();
-my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $subset_json, $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow) = $sth->fetchrow_array();
+my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $subset_json, $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow, $preclude_highfreq_kmer, $seq_index_name) = $sth->fetchrow_array();
 $sth->finish();
 
 # Get sequence data type information
@@ -113,13 +113,59 @@ my $seq_datatype = 'unknown';
 eval {
     my $datatype_sth = $dbh->prepare(<<SQL);
 SELECT CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
-FROM information_schema.columns 
+FROM information_schema.columns
 WHERE table_name = 'kafsss_data' AND column_name = 'seq'
 SQL
     $datatype_sth->execute();
     ($seq_datatype) = $datatype_sth->fetchrow_array();
     $datatype_sth->finish();
 };
+
+# Get GIN index information from pg_indexes
+my @gin_indexes = ();
+eval {
+    my $idx_sth = $dbh->prepare(<<SQL);
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'kafsss_data'
+  AND indexdef LIKE '%USING gin%'
+  AND indexdef LIKE '%seq %'
+ORDER BY indexname
+SQL
+    $idx_sth->execute();
+    while (my ($indexname, $indexdef) = $idx_sth->fetchrow_array()) {
+        push @gin_indexes, { name => $indexname, definition => $indexdef };
+    }
+    $idx_sth->finish();
+};
+
+# Try to get detailed index info from kmersearch_index_info if available
+my @detailed_index_info = ();
+eval {
+    my $info_sth = $dbh->prepare(<<SQL);
+SELECT
+    i.indexrelid::regclass AS index_name,
+    kii.kmer_size,
+    kii.occur_bitlen,
+    kii.max_appearance_rate,
+    kii.max_appearance_nrow,
+    kii.preclude_highfreq_kmer,
+    kii.total_nrow,
+    kii.highfreq_kmer_count,
+    kii.created_at
+FROM kmersearch_index_info kii
+JOIN pg_index i ON i.indexrelid = kii.index_oid
+WHERE kii.table_oid = 'kafsss_data'::regclass
+  AND kii.column_name = 'seq'
+ORDER BY kii.created_at DESC
+SQL
+    $info_sth->execute();
+    while (my $row = $info_sth->fetchrow_hashref()) {
+        push @detailed_index_info, $row;
+    }
+    $info_sth->finish();
+};
+# Ignore error if kmersearch_index_info table doesn't exist
 
 $dbh->disconnect();
 
@@ -146,9 +192,49 @@ if (defined $kmer_size) {
     print STDERR "Occurrence bit length: $occur_bitlen\n";
     print STDERR "Max appearance rate: $max_appearance_rate\n";
     print STDERR "Max appearance nrow: $max_appearance_nrow\n";
+    if (defined $preclude_highfreq_kmer) {
+        print STDERR "High-freq k-mer excluded: " . ($preclude_highfreq_kmer ? 'yes' : 'no') . "\n";
+    }
+    if (defined $seq_index_name) {
+        print STDERR "Seq index name: $seq_index_name\n";
+    }
 } else {
     print STDERR "\n=== K-mer Index Configuration ===\n";
     print STDERR "K-mer index: Not configured\n";
+}
+
+# Display GIN index information
+print STDERR "\n=== GIN Index Information ===\n";
+if (@detailed_index_info > 0) {
+    for my $info (@detailed_index_info) {
+        print STDERR "Index: $info->{index_name}\n";
+        print STDERR "  K-mer size: $info->{kmer_size}\n";
+        print STDERR "  Occurrence bit length: $info->{occur_bitlen}\n";
+        print STDERR "  Max appearance rate: $info->{max_appearance_rate}\n";
+        print STDERR "  Max appearance nrow: $info->{max_appearance_nrow}\n";
+        print STDERR "  High-freq k-mer excluded: " . ($info->{preclude_highfreq_kmer} ? 'yes' : 'no') . "\n";
+        print STDERR "  Total rows: $info->{total_nrow}\n" if defined $info->{total_nrow};
+        print STDERR "  High-freq k-mer count: $info->{highfreq_kmer_count}\n" if defined $info->{highfreq_kmer_count};
+        print STDERR "  Created at: $info->{created_at}\n" if defined $info->{created_at};
+        print STDERR "\n";
+    }
+} elsif (@gin_indexes > 0) {
+    # Fall back to basic index information from pg_indexes
+    for my $idx (@gin_indexes) {
+        print STDERR "Index: $idx->{name}\n";
+        # Try to parse index name for parameters if it follows new naming convention
+        if ($idx->{name} =~ /idx_kafsss_data_seq_gin_km(\d+)_ob(\d+)_mar(\d{4})_man(\d+)_phk([TF])/) {
+            my ($km, $ob, $mar, $man, $phk) = ($1, $2, $3, $4, $5);
+            print STDERR "  K-mer size: $km\n";
+            print STDERR "  Occurrence bit length: $ob\n";
+            print STDERR "  Max appearance rate: " . ($mar / 1000) . "\n";
+            print STDERR "  Max appearance nrow: $man\n";
+            print STDERR "  High-freq k-mer excluded: " . ($phk eq 'T' ? 'yes' : 'no') . "\n";
+        }
+        print STDERR "\n";
+    }
+} else {
+    print STDERR "No GIN indexes found on seq column.\n";
 }
 
 # Parse and display subset information

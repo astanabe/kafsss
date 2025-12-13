@@ -13,9 +13,10 @@ use File::Basename;
 use MIME::Base64;
 use Time::HiRes qw(time);
 use Fcntl qw(:flock);
+use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
 
 # Version number
-my $VERSION = "1.0.0";
+my $VERSION = "__VERSION__";
 
 # Default values - Configure these for your environment
 # These values will be used when not specified in API requests
@@ -486,18 +487,19 @@ sub handle_cancel_request {
 
 sub handle_metadata_request {
     my ($cgi) = @_;
-    
+
     eval {
         send_success_response({
             default_database => $default_database,
             default_subset => $default_subset,
             default_maxnseq => $default_maxnseq,
             default_minscore => $default_minscore,
-            server_version => "1.0",
+            server_version => $VERSION,
+            accept_gzip_request => JSON::true,
             supported_endpoints => ["/search", "/result", "/status", "/cancel", "/metadata"]
         });
     };
-    
+
     if ($@) {
         send_error_response(500, "INTERNAL_ERROR", "Server error: $@");
     }
@@ -633,31 +635,41 @@ sub format_timestamp {
 
 sub parse_json_request {
     my ($cgi) = @_;
-    
+
     my $content_type = $ENV{CONTENT_TYPE} || '';
-    
+    my $content_encoding = $ENV{HTTP_CONTENT_ENCODING} || '';
+
     if ($content_type !~ m{application/json}i) {
         die "Content-Type must be application/json";
     }
-    
-    my $json_text = '';
-    
+
+    my $raw_content = '';
+
     # Try to read from param first (for form-encoded data)
     my $postdata = $cgi->param('POSTDATA');
     if ($postdata) {
-        $json_text = $postdata;
+        $raw_content = $postdata;
     } else {
         # Read from STDIN for raw POST data
         my $content_length = $ENV{CONTENT_LENGTH} || 0;
         if ($content_length > 0) {
-            read(STDIN, $json_text, $content_length);
+            read(STDIN, $raw_content, $content_length);
         }
     }
-    
-    if (!$json_text) {
+
+    if (!$raw_content) {
         die "No JSON data received";
     }
-    
+
+    # Decompress if gzip-encoded
+    my $json_text;
+    if ($content_encoding =~ /gzip/i) {
+        gunzip(\$raw_content => \$json_text)
+            or die "Failed to decompress gzip request: $GunzipError";
+    } else {
+        $json_text = $raw_content;
+    }
+
     my $data = decode_json($json_text);
     return $data;
 }
@@ -1019,15 +1031,30 @@ sub perform_database_search {
         $sth->execute();
         my ($table_count) = $sth->fetchrow_array();
         $sth->finish();
-        
-        die "Table 'kafsss_data' does not exist in database '$request->{db}'\n" 
+
+        die "Table 'kafsss_data' does not exist in database '$request->{db}'\n"
             unless $table_count > 0;
+
+        # Check if database has k-mer indexes (seq column GIN index)
+        $sth = $dbh->prepare(<<SQL);
+SELECT 1 FROM pg_indexes
+WHERE tablename = 'kafsss_data'
+  AND indexname LIKE 'idx_kafsss_data_seq_gin_km%'
+LIMIT 1
+SQL
+        $sth->execute();
+        my $has_kmer_index = $sth->fetchrow_array();
+        $sth->finish();
+
+        die "Database '$request->{db}' does not have k-mer indexes.\n" .
+            "Please create indexes first using: kafssindex --mode=create $request->{db}\n"
+            unless $has_kmer_index;
     };
-    
+
     if ($@) {
         die "Database validation failed: $@";
     }
-    
+
     # Get metadata from kafsss_meta table
     my $metadata = get_metadata_from_meta($dbh);
     my $kmer_size = $metadata->{kmer_size};

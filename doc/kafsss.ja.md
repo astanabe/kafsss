@@ -446,7 +446,7 @@ kafsspart --npart=32 --tablespace=fast_ssd mydb
 - `--port=PORT` - PostgreSQLサーバーポート
 - `--username=USER` - PostgreSQLユーザー名
 - `--kmersize=INT` - 解析用k-mer長（デフォルト: 8、範囲: 4-64）
-- `--maxpappear=REAL` - 最大k-mer出現率（デフォルト: 0.5、範囲: 0.0-1.0）
+- `--maxpappear=REAL` - 最大k-mer出現率（デフォルト: 0.5、範囲: 0.0-1.0、小数点以下3桁まで）
 - `--maxnappear=INT` - k-merを含む最大行数（デフォルト: 0=無制限）
 - `--occurbitlen=INT` - 出現カウント用ビット数（デフォルト: 8、範囲: 0-16）
 - `--numthreads=INT` - 並列ワーカー数（デフォルト: 0=自動）
@@ -583,6 +583,7 @@ kafsssearch [オプション] 入力ファイル名 出力ファイル名
 - `--minscore=INT` - 最小スコア閾値（デフォルト: 1）
 - `--minpsharedkmer=REAL` - 共有k-merの最小割合（0.0-1.0、デフォルト: 0.5）
 - `--mode=MODE` - 出力モード: minimum (min)、matchscore (score)、sequence (seq)、maximum (max)（デフォルト: matchscore）
+- `--outfmt=FORMAT` - 出力形式: TSV（デフォルト）、multiTSV、FASTA、multiFASTA、BLASTDB。圧縮接尾辞（.gz、.bz2、.xz、.zst）対応
 - `--numthreads=INT` - 並列スレッド数（デフォルト: 1）
 
 #### 入出力ファイル
@@ -610,7 +611,20 @@ kafsssearch --db=mydb --numthreads=4 --maxnseq=500 query.fasta results.tsv
 
 # パイプライン使用
 cat query.fasta | kafsssearch --db=mydb stdin stdout > results.tsv
+
+# 検索結果からBLASTデータベースを作成
+kafsssearch --db=mydb --outfmt=BLASTDB query.fasta results
+
+# 圧縮出力
+kafsssearch --db=mydb --outfmt=TSV.gz query.fasta results.tsv.gz
 ```
+
+#### 圧縮ツール
+出力圧縮には以下の外部ツールを使用します（事前にインストールが必要）：
+- `.gz` - `pigz`を使用（並列gzip）
+- `.bz2` - `pbzip2`を使用（並列bzip2）
+- `.xz` - `xz`を使用
+- `.zst` - `zstd`を使用
 
 ### kafssdbinfo
 
@@ -673,6 +687,7 @@ kafsssearchclient --jobs
 - `--minscore=INT` - 最小スコア閾値（デフォルト: 1）
 - `--minpsharedkmer=REAL` - 共有k-merの最小割合（0.0-1.0、デフォルト: 0.5）
 - `--mode=MODE` - 出力モード: minimum (min)、matchscore (score)、sequence (seq)、maximum (max)（デフォルト: matchscore）
+- `--outfmt=FORMAT` - 出力形式: TSV（デフォルト）、multiTSV、FASTA、multiFASTA、BLASTDB。圧縮接尾辞（.gz、.bz2、.xz、.zst）対応
 - `--numthreads=INT` - 並列スレッド数（デフォルト: 1）
 - `--maxnretry=INT` - ステータス確認の最大リトライ数（デフォルト: 0 = 無制限）
 - `--maxnretry_total=INT` - 全操作の最大総リトライ数（デフォルト: 100）
@@ -890,7 +905,8 @@ my $default_numthreads = 5;             # 並列スレッド数
   "default_subset": "bacteria",
   "default_maxnseq": 1000,
   "default_minscore": "10",
-  "server_version": "1.0",
+  "server_version": "0.1.2025.12.13",
+  "accept_gzip_request": true,
   "supported_endpoints": ["/search", "/result", "/status", "/cancel", "/metadata"]
 }
 ```

@@ -7,7 +7,7 @@ use warnings;
 # このスクリプトは、kafsssツールキットの実行に必要なPerlモジュールが
 # すべてインストールされているかを確認します。
 
-my $VERSION = "1.0.0";
+my $VERSION = "__VERSION__";
 
 print "kafsss Tools - Dependency Checker v$VERSION\n";
 print "=" x 60 . "\n\n";

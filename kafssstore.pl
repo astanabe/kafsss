@@ -10,7 +10,7 @@ use Sys::Hostname;
 use File::Basename;
 
 # Version number
-my $VERSION = "1.0.0";
+my $VERSION = "__VERSION__";
 
 # Default values
 my $default_host = $ENV{PGHOST} || 'localhost';

@@ -1,16 +1,19 @@
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 PERL ?= $(filter /%,$(shell /bin/sh -c 'type perl'))
-VERSION := 0.1.2025.07.13
-YEAR := 2025
+VERSION := 0.1.2025.12.13
 PROGRAM := kafssdbinfo kafssdedup kafssfreq kafssindex kafsspart kafsspreload kafsssubset kafsssearch kafsssearchclient kafssstore
+SERVER := kafsssearchserver.pl kafsssearchserver.fcgi kafsssearchserver.psgi
 
-all: $(PROGRAM)
+all: $(PROGRAM) version-server
 
 %: %.pl
 	echo '#!'$(PERL) > $@
 	echo "use lib '$(PREFIX)/share/kafsss/lib/perl5';" >> $@
-	tail -n +2 $< >> $@
+	tail -n +2 $< | perl -npe 's/__VERSION__/$(VERSION)/g' >> $@
+
+version-server:
+	perl -i -npe 's/__VERSION__/$(VERSION)/g' $(SERVER)
 
 install: $(PROGRAM)
 	chmod 755 $^
@@ -21,5 +24,6 @@ install: $(PROGRAM)
 
 clean:
 	rm -f $(PROGRAM)
+	perl -i -npe 's/$(VERSION)/__VERSION__/g' $(SERVER)
 
-.PHONY: all install clean
+.PHONY: all install clean version-server

@@ -33,11 +33,71 @@ The kafsss (K-mer based Alignment-Free Splitted Sequence Search) suite is a comp
 
 **This project requires the latest version of pg_kmersearch extension. Compatibility with older versions is not maintained.**
 
+**Database upgrade considerations are NOT required.** When the kafsss tools are updated, existing databases created with older versions do NOT need to be supported. Always assume databases are created with the current version of the tools.
+
 The codebase assumes the following pg_kmersearch features from the latest version:
 - Function name: `kmersearch_matchscore()` (not rawscore/correctedscore)
 - GUC variables: `kmersearch.min_shared_kmer_rate` (not min_shared_ngram_key_rate)
 - Rawscore cache has been completely removed (kmersearch.rawscore_cache_max_entries no longer exists)
 - GIN index creation requires explicit operator class specification (e.g., `kmersearch_dna4_gin_ops_int4`)
+- Multiple `kmer_size` entries can coexist in `kmersearch_highfreq_kmer_meta` table
+- When multiple `kmer_size` entries exist, specify `--kmersize` option explicitly
+
+### GIN Index Naming Convention
+
+GIN indexes on the `seq` column use a structured naming format that encodes all build parameters:
+
+```
+idx_[tablename]_seq_gin_km{N}_ob{N}_mar{NNNN}_man{N}_phk{T/F}
+```
+
+- `km{N}`: kmer_size value
+- `ob{N}`: occur_bitlen value
+- `mar{NNNN}`: max_appearance_rate × 1000 (4-digit integer, e.g., 0.050 → 0050). **Important**: max_appearance_rate is limited to 3 decimal places to fit in this encoding
+- `man{N}`: max_appearance_nrow value
+- `phk{T/F}`: preclude_highfreq_kmer flag (T=true, F=false)
+
+Example: `idx_kafsss_data_seq_gin_km8_ob8_mar0500_man0_phkT`
+
+### kafsss_meta Table Columns
+
+The `kafsss_meta` table may contain the following index-related columns (added by kafssindex):
+- `kmer_size`: K-mer size used for index
+- `occur_bitlen`: Occurrence bit length
+- `max_appearance_rate`: Maximum appearance rate threshold
+- `max_appearance_nrow`: Maximum appearance row count
+- `preclude_highfreq_kmer`: Whether high-frequency k-mers are excluded (boolean)
+- `seq_index_name`: Name of the GIN index created on seq column
+
+### Compressed Output Formats
+
+kafsssearch and kafsssearchclient support compressed output using external compression tools:
+- `.gz`: Uses `pigz` (parallel gzip)
+- `.bz2`: Uses `pbzip2` (parallel bzip2)
+- `.xz`: Uses `xz`
+- `.zst`: Uses `zstd`
+
+Format specification examples:
+- `--outfmt=TSV.gz` - gzip-compressed TSV output
+- `--outfmt=multiTSV.zst` - zstd-compressed multi-file TSV output
+- `--outfmt=FASTA.bz2` - bzip2-compressed FASTA output
+- `--outfmt=BLASTDB` - Create BLAST database using piped output to makeblastdb
+
+### BLASTDB Output Format
+
+kafsssearch and kafsssearchclient support creating BLAST databases directly from search results:
+- Output is piped directly to `makeblastdb` without creating intermediate files
+- Creates nucleotide BLAST databases with hash index and parsed sequence IDs
+- Output file prefix becomes the database name (e.g., `results` creates `results_1`, `results_2`, etc.)
+- For multifile output, each query creates a separate BLAST database
+
+### HTTP Compression Support
+
+Server components (kafsssearchserver.*) support HTTP compression:
+- **Response compression**: Servers send gzip-compressed responses when client sends `Accept-Encoding: gzip`
+- **Request compression**: Servers accept gzip-compressed request bodies with `Content-Encoding: gzip`
+- Client (kafsssearchclient) automatically uses gzip compression for both requests and responses
+- The `/metadata` endpoint includes `accept_gzip_request: true` to indicate request compression support
 
 ### Required GUC Variable Settings
 
@@ -231,6 +291,7 @@ grep -n "pg_kmersearch" *.pl
 
 ### Performance Parameters
 - K-mer size: Default 8, configurable via `--kmersize` in kafssfreq and kafssindex
+- max_appearance_rate (`--maxpappear`): Maximum 3 decimal places allowed (e.g., 0.050, 0.125). Values with more than 3 decimal places will cause an error because the rate is encoded as a 4-digit integer (rate × 1000) in the GIN index name
 - Search modes in kafsssearch:
   - `minimum` (alias: `min`) - No score calculation, fastest
   - `matchscore` (alias: `score`) - Calculate match scores (default)

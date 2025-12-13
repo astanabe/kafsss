@@ -9,7 +9,7 @@ use Sys::Hostname;
 use File::Basename;
 
 # Version number
-my $VERSION = "1.0.0";
+my $VERSION = "__VERSION__";
 
 # Default values
 my $default_host = $ENV{PGHOST} || 'localhost';
@@ -79,6 +79,7 @@ die "Invalid mode '$mode'. Must be 'create' or 'drop'\n" unless $mode eq 'create
 # Validate parameters
 die "kmer_size must be between 4 and 64\n" unless $kmer_size >= 4 && $kmer_size <= 64;
 die "max_appearance_rate must be between 0.0 and 1.0\n" unless $max_appearance_rate >= 0.0 && $max_appearance_rate <= 1.0;
+validate_max_appearance_rate_precision($max_appearance_rate);
 die "max_appearance_nrow must be non-negative\n" unless $max_appearance_nrow >= 0;
 die "occur_bitlen must be between 0 and 16\n" unless $occur_bitlen >= 0 && $occur_bitlen <= 16;
 die "numthreads must be non-negative\n" unless $numthreads >= 0;
@@ -602,47 +603,59 @@ SQL
 
 sub check_analysis_exists {
     my ($dbh) = @_;
-    
+
     # Check if kmersearch_highfreq_kmer table exists and has data for kafsss_data
+    # with the current kmer_size setting
     my $sth = $dbh->prepare(<<SQL);
-SELECT COUNT(*) 
-FROM information_schema.tables 
+SELECT COUNT(*)
+FROM information_schema.tables
 WHERE table_name = 'kmersearch_highfreq_kmer'
 SQL
     $sth->execute();
     my ($table_exists) = $sth->fetchrow_array();
     $sth->finish();
-    
+
     if ($table_exists > 0) {
-        # Check if there are records for kafsss_data table
-        $sth = $dbh->prepare("SELECT COUNT(*) FROM kmersearch_highfreq_kmer WHERE table_oid = 'kafsss_data'::regclass AND column_name = 'seq'");
-        $sth->execute();
+        # Check if there are records for kafsss_data table with the current kmer_size
+        $sth = $dbh->prepare(<<SQL);
+SELECT COUNT(*) FROM kmersearch_highfreq_kmer
+WHERE table_oid = 'kafsss_data'::regclass
+  AND column_name = 'seq'
+  AND kmer_size = ?
+SQL
+        $sth->execute($kmer_size);
         my ($record_count) = $sth->fetchrow_array();
         $sth->finish();
-        
+
         return $record_count > 0;
     }
-    
+
     # Check if kmersearch_highfreq_kmer_meta table exists and has data for kafsss_data
+    # with the current kmer_size setting
     $sth = $dbh->prepare(<<SQL);
-SELECT COUNT(*) 
-FROM information_schema.tables 
+SELECT COUNT(*)
+FROM information_schema.tables
 WHERE table_name = 'kmersearch_highfreq_kmer_meta'
 SQL
     $sth->execute();
     ($table_exists) = $sth->fetchrow_array();
     $sth->finish();
-    
+
     if ($table_exists > 0) {
-        # Check if there are records for kafsss_data table
-        $sth = $dbh->prepare("SELECT COUNT(*) FROM kmersearch_highfreq_kmer_meta WHERE table_oid = 'kafsss_data'::regclass AND column_name = 'seq'");
-        $sth->execute();
+        # Check if there are records for kafsss_data table with the current kmer_size
+        $sth = $dbh->prepare(<<SQL);
+SELECT COUNT(*) FROM kmersearch_highfreq_kmer_meta
+WHERE table_oid = 'kafsss_data'::regclass
+  AND column_name = 'seq'
+  AND kmer_size = ?
+SQL
+        $sth->execute($kmer_size);
         my ($record_count) = $sth->fetchrow_array();
         $sth->finish();
-        
+
         return $record_count > 0;
     }
-    
+
     return 0;
 }
 
@@ -668,4 +681,21 @@ sub validate_database_schema {
     }
     
     print "Database schema validation completed.\n";
+}
+
+# Validate that max_appearance_rate has at most 3 decimal places
+sub validate_max_appearance_rate_precision {
+    my ($rate) = @_;
+    return unless defined $rate;
+
+    # Convert to string and check decimal places
+    my $rate_str = sprintf("%.10f", $rate);
+    $rate_str =~ s/0+$//;  # Remove trailing zeros
+    $rate_str =~ s/\.$//;  # Remove trailing decimal point
+
+    if ($rate_str =~ /\.(\d{4,})/) {
+        die "Error: --maxpappear can only have up to 3 decimal places (e.g., 0.050, 0.125).\n" .
+            "Value '$rate' has too many decimal places.\n" .
+            "This is required because the GIN index name encodes the rate as a 4-digit integer (rate * 1000).\n";
+    }
 }

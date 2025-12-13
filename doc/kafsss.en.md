@@ -446,7 +446,7 @@ kafsspart --npart=32 --tablespace=fast_ssd mydb
 - `--port=PORT` - PostgreSQL server port
 - `--username=USER` - PostgreSQL username
 - `--kmersize=INT` - K-mer length for analysis (default: 8, range: 4-64)
-- `--maxpappear=REAL` - Max k-mer appearance rate (default: 0.5, range: 0.0-1.0)
+- `--maxpappear=REAL` - Max k-mer appearance rate (default: 0.5, range: 0.0-1.0, max 3 decimal places)
 - `--maxnappear=INT` - Max rows containing k-mer (default: 0=unlimited)
 - `--occurbitlen=INT` - Bits for occurrence count (default: 8, range: 0-16)
 - `--numthreads=INT` - Number of parallel workers (default: 0=auto)
@@ -583,6 +583,7 @@ kafsssearch [options] input_file output_file
 - `--minscore=INT` - Minimum score threshold (default: 1)
 - `--minpsharedkmer=REAL` - Minimum percentage of shared k-mers (0.0-1.0, default: 0.5)
 - `--mode=MODE` - Output mode: minimum (min), matchscore (score), sequence (seq), maximum (max) (default: matchscore)
+- `--outfmt=FORMAT` - Output format: TSV (default), multiTSV, FASTA, multiFASTA, BLASTDB. Supports compression suffix (.gz, .bz2, .xz, .zst)
 - `--numthreads=INT` - Number of parallel threads (default: 1)
 
 #### Input/Output Files
@@ -610,7 +611,20 @@ kafsssearch --db=mydb --numthreads=4 --maxnseq=500 query.fasta results.tsv
 
 # Pipeline usage
 cat query.fasta | kafsssearch --db=mydb stdin stdout > results.tsv
+
+# Create BLAST database from search results
+kafsssearch --db=mydb --outfmt=BLASTDB query.fasta results
+
+# Compressed output
+kafsssearch --db=mydb --outfmt=TSV.gz query.fasta results.tsv.gz
 ```
+
+#### Compression Tools
+Output compression uses external tools that must be installed:
+- `.gz` - Uses `pigz` (parallel gzip)
+- `.bz2` - Uses `pbzip2` (parallel bzip2)
+- `.xz` - Uses `xz`
+- `.zst` - Uses `zstd`
 
 ### kafssdbinfo
 
@@ -673,6 +687,7 @@ kafsssearchclient --jobs
 - `--minscore=INT` - Minimum score threshold (default: 1)
 - `--minpsharedkmer=REAL` - Minimum percentage of shared k-mers (0.0-1.0, default: 0.5)
 - `--mode=MODE` - Output mode: minimum (min), matchscore (score), sequence (seq), maximum (max) (default: matchscore)
+- `--outfmt=FORMAT` - Output format: TSV (default), multiTSV, FASTA, multiFASTA, BLASTDB. Supports compression suffix (.gz, .bz2, .xz, .zst)
 - `--numthreads=INT` - Number of parallel threads (default: 1)
 - `--maxnretry=INT` - Maximum retries per status check (default: 0 = unlimited)
 - `--maxnretry_total=INT` - Maximum total retries for all operations (default: 100)
@@ -890,7 +905,8 @@ Response JSON:
   "default_subset": "bacteria",
   "default_maxnseq": 1000,
   "default_minscore": "10",
-  "server_version": "1.0",
+  "server_version": "0.1.2025.12.13",
+  "accept_gzip_request": true,
   "supported_endpoints": ["/search", "/result", "/status", "/cancel", "/metadata"]
 }
 ```

@@ -9,7 +9,7 @@ use Sys::Hostname;
 use File::Basename;
 
 # Version number
-my $VERSION = "1.0.0";
+my $VERSION = "__VERSION__";
 
 # Default values
 my $default_host = $ENV{PGHOST} || 'localhost';
@@ -182,6 +182,21 @@ exit 0;
 #
 # Subroutines
 #
+
+# Generate GIN index name with unified naming convention
+# Format: idx_[tablename]_[columnname]_gin_km{N}_ob{N}_mar{NNNN}_man{N}_phk{T/F}
+sub generate_gin_index_name {
+    my ($table_name, $column_name, $kmer_sz, $occur_bl, $max_app_rate, $max_app_nrow, $preclude_hf) = @_;
+
+    # Convert max_appearance_rate to 4-digit integer representation
+    # 0.050 -> 0050, 0.5 -> 0500, 0.125 -> 0125
+    my $mar_int = sprintf("%04d", int($max_app_rate * 1000 + 0.5));
+
+    my $phk_flag = $preclude_hf ? 'T' : 'F';
+
+    return sprintf("idx_%s_%s_gin_km%d_ob%d_mar%s_man%d_phk%s",
+        $table_name, $column_name, $kmer_sz, $occur_bl, $mar_int, $max_app_nrow, $phk_flag);
+}
 
 sub print_help {
     print <<EOF;
@@ -423,19 +438,23 @@ SQL
     
     # Create indexes on parent table
     print "\nCreating indexes on parent table 'kafsss_data'...\n";
-    create_parent_table_indexes($dbh, $op_class, $tablespace);
+    create_parent_table_indexes($dbh, $op_class, $tablespace, $use_highfreq_cache);
     
     # Do not free cache - PostgreSQL will handle it automatically on disconnect
     # This prevents interfering with other processes that may be using the cache
-    
+
+    # Generate the seq index name for metadata storage
+    my $seq_index_name = generate_gin_index_name('kafsss_data', 'seq',
+        $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow, $use_highfreq_cache);
+
     # Update kafsss_meta table
-    update_meta_table($dbh);
+    update_meta_table($dbh, $use_highfreq_cache, $seq_index_name);
     
     print "All indexes created successfully.\n";
 }
 
 sub create_parent_table_indexes {
-    my ($dbh, $op_class, $tablespace) = @_;
+    my ($dbh, $op_class, $tablespace, $use_highfreq_cache) = @_;
 
     # Note: Parent table indexes (subset, seqid) do not use k-mer search,
     # so high-frequency k-mer cache settings are not needed here.
@@ -448,7 +467,7 @@ sub create_parent_table_indexes {
     if ($tablespace) {
         $subset_sql .= " TABLESPACE \"$tablespace\"";
     }
-    
+
     eval {
         $dbh->do($subset_sql);
         print "Parent index '$subset_index_name' created successfully.\n";
@@ -456,7 +475,7 @@ sub create_parent_table_indexes {
     if ($@) {
         die "Failed to create parent index '$subset_index_name': $@\n";
     }
-    
+
     # Create seqid column GIN index on parent table
     my $seqid_index_name = 'idx_kafsss_data_seqid_gin';
     print "Creating parent index '$seqid_index_name'...\n";
@@ -464,7 +483,7 @@ sub create_parent_table_indexes {
     if ($tablespace) {
         $seqid_sql .= " TABLESPACE \"$tablespace\"";
     }
-    
+
     eval {
         $dbh->do($seqid_sql);
         print "Parent index '$seqid_index_name' created successfully.\n";
@@ -472,15 +491,16 @@ sub create_parent_table_indexes {
     if ($@) {
         die "Failed to create parent index '$seqid_index_name': $@\n";
     }
-    
-    # Create seq column GIN index on parent table
-    my $seq_index_name = 'idx_kafsss_data_seq_gin';
+
+    # Create seq column GIN index on parent table with new naming convention
+    my $seq_index_name = generate_gin_index_name('kafsss_data', 'seq',
+        $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow, $use_highfreq_cache);
     print "Creating parent index '$seq_index_name' with operator class '$op_class'...\n";
     my $seq_sql = "CREATE INDEX IF NOT EXISTS $seq_index_name ON kafsss_data USING gin(seq $op_class)";
     if ($tablespace) {
         $seq_sql .= " TABLESPACE \"$tablespace\"";
     }
-    
+
     eval {
         $dbh->do($seq_sql);
         print "Parent index '$seq_index_name' created successfully.\n";
@@ -846,10 +866,10 @@ sub undo_highfreq_analysis {
 
 
 sub update_meta_table {
-    my ($dbh) = @_;
-    
+    my ($dbh, $preclude_highfreq_kmer, $seq_index_name) = @_;
+
     print "Updating kafsss_meta table...\n";
-    
+
     # Check if kafsss_meta table has rows, insert if empty
     eval {
         my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM kafsss_meta");
@@ -860,17 +880,18 @@ sub update_meta_table {
     if ($@) {
         die "Failed to check kafsss_meta table: $@\n";
     }
-    
+
     # Use do() method which works correctly after reconnection
     eval {
+        my $phk_value = $preclude_highfreq_kmer ? 'true' : 'false';
         my $sql = sprintf(
-            "UPDATE kafsss_meta SET kmer_size = %d, max_appearance_rate = %f, max_appearance_nrow = %d, occur_bitlen = %d",
-            $kmer_size, $max_appearance_rate, $max_appearance_nrow, $occur_bitlen
+            "UPDATE kafsss_meta SET kmer_size = %d, max_appearance_rate = %f, max_appearance_nrow = %d, occur_bitlen = %d, preclude_highfreq_kmer = %s, seq_index_name = '%s'",
+            $kmer_size, $max_appearance_rate, $max_appearance_nrow, $occur_bitlen, $phk_value, $seq_index_name
         );
         $dbh->do($sql);
-        print "Metadata updated: kmer_size=$kmer_size, max_appearance_rate=$max_appearance_rate, max_appearance_nrow=$max_appearance_nrow, occur_bitlen=$occur_bitlen\n";
+        print "Metadata updated: kmer_size=$kmer_size, max_appearance_rate=$max_appearance_rate, max_appearance_nrow=$max_appearance_nrow, occur_bitlen=$occur_bitlen, preclude_highfreq_kmer=$phk_value, seq_index_name=$seq_index_name\n";
     };
-    
+
     if ($@) {
         die "Failed to update kafsss_meta table: $@\n";
     }
@@ -878,22 +899,24 @@ sub update_meta_table {
 
 sub clear_meta_table {
     my ($dbh) = @_;
-    
+
     print "Clearing kafsss_meta table...\n";
-    
+
     eval {
         my $update_sth = $dbh->prepare(<<SQL);
-UPDATE kafsss_meta SET 
-    kmer_size = NULL, 
-    max_appearance_rate = NULL, 
-    max_appearance_nrow = NULL, 
-    occur_bitlen = NULL
+UPDATE kafsss_meta SET
+    kmer_size = NULL,
+    max_appearance_rate = NULL,
+    max_appearance_nrow = NULL,
+    occur_bitlen = NULL,
+    preclude_highfreq_kmer = NULL,
+    seq_index_name = NULL
 SQL
         $update_sth->execute();
         $update_sth->finish();
         print "Metadata cleared from kafsss_meta table.\n";
     };
-    
+
     if ($@) {
         print STDERR "Warning: Failed to clear kafsss_meta table: $@\n";
     }
@@ -901,41 +924,64 @@ SQL
 
 sub load_and_validate_parameters {
     my ($dbh) = @_;
-    
+
     print "Checking for parameters in kmersearch_highfreq_kmer table...\n";
-    
+
     # Track which parameters were specified on command line
     my $kmer_size_specified = defined($kmer_size);
     my $max_appearance_rate_specified = defined($max_appearance_rate);
     my $max_appearance_nrow_specified = defined($max_appearance_nrow);
     my $occur_bitlen_specified = defined($occur_bitlen);
-    
-    # Try to get parameters from kmersearch_highfreq_kmer_meta table
-    my $sth = $dbh->prepare(<<SQL);
-SELECT DISTINCT kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
+
+    # Build query based on whether kmer_size is specified
+    # This supports multiple kmer_size entries in kmersearch_highfreq_kmer_meta
+    my $sql;
+    my @bind_params;
+    if ($kmer_size_specified) {
+        # Filter by specified kmer_size
+        $sql = <<SQL;
+SELECT kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
+FROM kmersearch_highfreq_kmer_meta
+WHERE table_oid = 'kafsss_data'::regclass
+  AND column_name = 'seq'
+  AND kmer_size = ?
+SQL
+        @bind_params = ($kmer_size);
+    } else {
+        # Get all entries for this table/column
+        $sql = <<SQL;
+SELECT kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
 FROM kmersearch_highfreq_kmer_meta
 WHERE table_oid = 'kafsss_data'::regclass
   AND column_name = 'seq'
 SQL
-    
+        @bind_params = ();
+    }
+
+    my $sth = $dbh->prepare($sql);
+
     eval {
-        $sth->execute();
+        $sth->execute(@bind_params);
         my @rows = ();
         while (my $row = $sth->fetchrow_hashref()) {
             push @rows, $row;
         }
         $sth->finish();
-        
+
         if (@rows == 0) {
             # No data in kmersearch_highfreq_kmer_meta table
-            print "No parameters found in kmersearch_highfreq_kmer_meta table.\n";
-            
+            if ($kmer_size_specified) {
+                print "No parameters found in kmersearch_highfreq_kmer_meta table for kmer_size=$kmer_size.\n";
+            } else {
+                print "No parameters found in kmersearch_highfreq_kmer_meta table.\n";
+            }
+
             # Use defaults if not specified
             $kmer_size = $kmer_size // $default_kmer_size;
             $max_appearance_rate = $max_appearance_rate // $default_max_appearance_rate;
             $max_appearance_nrow = $max_appearance_nrow // $default_max_appearance_nrow;
             $occur_bitlen = $occur_bitlen // $default_occur_bitlen;
-            
+
             print "Using " . ($kmer_size_specified ? "specified" : "default") . " kmer_size: $kmer_size\n";
             print "Using " . ($max_appearance_rate_specified ? "specified" : "default") . " max_appearance_rate: $max_appearance_rate\n";
             print "Using " . ($max_appearance_nrow_specified ? "specified" : "default") . " max_appearance_nrow: $max_appearance_nrow\n";
@@ -948,24 +994,25 @@ SQL
             my $db_occur_bitlen = $row->{occur_bitlen};
             my $db_max_appearance_rate = $row->{max_appearance_rate};
             my $db_max_appearance_nrow = $row->{max_appearance_nrow};
-            
+
             print "Found parameters in kmersearch_highfreq_kmer_meta table:\n";
             print "  kmer_size: $db_kmer_size\n";
             print "  occur_bitlen: $db_occur_bitlen\n";
             print "  max_appearance_rate: $db_max_appearance_rate\n";
             print "  max_appearance_nrow: $db_max_appearance_nrow\n";
-            
+
             # Validate or use database values
             if ($kmer_size_specified) {
+                # Already filtered by kmer_size, so values should match
+                # Just verify consistency
                 if ($kmer_size != $db_kmer_size) {
-                    die "Error: Specified kmer_size ($kmer_size) does not match value in kmersearch_highfreq_kmer_meta table ($db_kmer_size).\n" .
-                        "Please use --kmersize=$db_kmer_size or run kafssfreq again with --kmersize=$kmer_size.\n";
+                    die "Internal error: kmer_size mismatch despite filtering.\n";
                 }
             } else {
                 $kmer_size = $db_kmer_size;
                 print "Using kmer_size from database: $kmer_size\n";
             }
-            
+
             if ($occur_bitlen_specified) {
                 if ($occur_bitlen != $db_occur_bitlen) {
                     die "Error: Specified occur_bitlen ($occur_bitlen) does not match value in kmersearch_highfreq_kmer_meta table ($db_occur_bitlen).\n" .
@@ -975,7 +1022,7 @@ SQL
                 $occur_bitlen = $db_occur_bitlen;
                 print "Using occur_bitlen from database: $occur_bitlen\n";
             }
-            
+
             if ($max_appearance_rate_specified) {
                 if (abs($max_appearance_rate - $db_max_appearance_rate) > 0.0001) {
                     die "Error: Specified max_appearance_rate ($max_appearance_rate) does not match value in kmersearch_highfreq_kmer_meta table ($db_max_appearance_rate).\n" .
@@ -985,7 +1032,7 @@ SQL
                 $max_appearance_rate = $db_max_appearance_rate;
                 print "Using max_appearance_rate from database: $max_appearance_rate\n";
             }
-            
+
             if ($max_appearance_nrow_specified) {
                 if ($max_appearance_nrow != $db_max_appearance_nrow) {
                     die "Error: Specified max_appearance_nrow ($max_appearance_nrow) does not match value in kmersearch_highfreq_kmer_meta table ($db_max_appearance_nrow).\n" .
@@ -997,27 +1044,53 @@ SQL
             }
         } else {
             # Multiple different parameter sets found
-            die "Error: Multiple different parameter sets found in kmersearch_highfreq_kmer_meta table.\n" .
-                "This indicates inconsistent frequency analysis. Please run kafssfreq again to fix this.\n";
+            if ($kmer_size_specified) {
+                # This shouldn't happen if kmer_size is part of primary key
+                die "Error: Multiple entries found for kmer_size=$kmer_size in kmersearch_highfreq_kmer_meta table.\n" .
+                    "This indicates database inconsistency. Please run kafssfreq again to fix this.\n";
+            } else {
+                # Multiple kmer_size entries exist - user must specify which one to use
+                my @kmer_sizes = map { $_->{kmer_size} } @rows;
+                die "Error: Multiple kmer_size entries found in kmersearch_highfreq_kmer_meta table: " . join(", ", @kmer_sizes) . "\n" .
+                    "Please specify which kmer_size to use with --kmersize option.\n";
+            }
         }
     };
-    
+
     if ($@) {
         # Error accessing table - use defaults
         print "Warning: Could not access kmersearch_highfreq_kmer_meta table: $@";
         print "Using default or specified parameters.\n";
-        
+
         $kmer_size = $kmer_size // $default_kmer_size;
         $max_appearance_rate = $max_appearance_rate // $default_max_appearance_rate;
         $max_appearance_nrow = $max_appearance_nrow // $default_max_appearance_nrow;
         $occur_bitlen = $occur_bitlen // $default_occur_bitlen;
     }
-    
+
     # Final validation of parameters
     die "kmersize must be between 4 and 64\n" unless $kmer_size >= 4 && $kmer_size <= 64;
     die "maxpappear must be between 0.0 and 1.0\n" unless $max_appearance_rate >= 0.0 && $max_appearance_rate <= 1.0;
+    validate_max_appearance_rate_precision($max_appearance_rate);
     die "maxnappear must be non-negative\n" unless $max_appearance_nrow >= 0;
     die "occurbitlen must be between 0 and 16\n" unless $occur_bitlen >= 0 && $occur_bitlen <= 16;
+}
+
+# Validate that max_appearance_rate has at most 3 decimal places
+sub validate_max_appearance_rate_precision {
+    my ($rate) = @_;
+    return unless defined $rate;
+
+    # Convert to string and check decimal places
+    my $rate_str = sprintf("%.10f", $rate);
+    $rate_str =~ s/0+$//;  # Remove trailing zeros
+    $rate_str =~ s/\.$//;  # Remove trailing decimal point
+
+    if ($rate_str =~ /\.(\d{4,})/) {
+        die "Error: --maxpappear can only have up to 3 decimal places (e.g., 0.050, 0.125).\n" .
+            "Value '$rate' has too many decimal places.\n" .
+            "This is required because the GIN index name encodes the rate as a 4-digit integer (rate * 1000).\n";
+    }
 }
 
 sub check_if_partitioned {
@@ -1225,7 +1298,15 @@ sub create_single_partition_index {
     }
 
     # Create index on partition with proper error handling
-    my $index_name = "idx_${partition_name}_$column->{name}_gin";
+    my $index_name;
+    if ($column->{name} eq 'seq') {
+        # Use new naming convention for seq column
+        $index_name = generate_gin_index_name($partition_name, 'seq',
+            $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow, $use_highfreq_cache);
+    } else {
+        # Use simple naming for subset and seqid columns
+        $index_name = "idx_${partition_name}_$column->{name}_gin";
+    }
     my $index_sql = "CREATE INDEX IF NOT EXISTS $index_name ON $partition_name USING gin($column->{name}";
     
     # Add operator class for seq column

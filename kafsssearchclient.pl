@@ -11,9 +11,41 @@ use Sys::Hostname;
 use File::Basename;
 use URI;
 use File::Temp qw(tempfile);
+use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
 
 # Version number
-my $VERSION = "1.0.0";
+my $VERSION = "__VERSION__";
+
+# Create UserAgent with gzip support
+sub create_ua {
+    my (%options) = @_;
+    my $timeout = $options{timeout} // 30;
+
+    my $ua = LWP::UserAgent->new(
+        timeout => $timeout,
+        agent => "kafsssearchclient/$VERSION"
+    );
+    $ua->default_header('Accept-Encoding' => 'gzip');
+
+    return $ua;
+}
+
+# HTTP response body decompression helper
+sub decompress_response_body {
+    my ($response) = @_;
+    my $content = $response->content;
+    my $encoding = $response->header('Content-Encoding') || '';
+
+    if ($encoding eq 'gzip') {
+        my $decompressed;
+        unless (gunzip(\$content => \$decompressed)) {
+            die "Failed to decompress gzip response: $GunzipError\n";
+        }
+        return $decompressed;
+    }
+
+    return $content;
+}
 
 # Default values
 my $default_maxnseq = 0;
@@ -1569,6 +1601,7 @@ sub normalize_outfmt {
 
     # Normalize format names (case-insensitive)
     my %format_aliases = (
+        # Uncompressed formats
         'tsv' => 'TSV',
         'TSV' => 'TSV',
         'multitsv' => 'multiTSV',
@@ -1578,11 +1611,116 @@ sub normalize_outfmt {
         'multifasta' => 'multiFASTA',
         'multiFASTA' => 'multiFASTA',
         'blastdb' => 'BLASTDB',
-        'BLASTDB' => 'BLASTDB'
+        'BLASTDB' => 'BLASTDB',
+
+        # Compressed TSV formats
+        'tsv.gz' => 'TSV.gz',
+        'TSV.gz' => 'TSV.gz',
+        'tsv.bz2' => 'TSV.bz2',
+        'TSV.bz2' => 'TSV.bz2',
+        'tsv.xz' => 'TSV.xz',
+        'TSV.xz' => 'TSV.xz',
+        'tsv.zst' => 'TSV.zst',
+        'TSV.zst' => 'TSV.zst',
+        'tsv.zstd' => 'TSV.zst',
+        'TSV.zstd' => 'TSV.zst',
+
+        # Compressed multiTSV formats
+        'multitsv.gz' => 'multiTSV.gz',
+        'multiTSV.gz' => 'multiTSV.gz',
+        'multitsv.bz2' => 'multiTSV.bz2',
+        'multiTSV.bz2' => 'multiTSV.bz2',
+        'multitsv.xz' => 'multiTSV.xz',
+        'multiTSV.xz' => 'multiTSV.xz',
+        'multitsv.zst' => 'multiTSV.zst',
+        'multiTSV.zst' => 'multiTSV.zst',
+        'multitsv.zstd' => 'multiTSV.zst',
+        'multiTSV.zstd' => 'multiTSV.zst',
+
+        # Compressed FASTA formats
+        'fasta.gz' => 'FASTA.gz',
+        'FASTA.gz' => 'FASTA.gz',
+        'fasta.bz2' => 'FASTA.bz2',
+        'FASTA.bz2' => 'FASTA.bz2',
+        'fasta.xz' => 'FASTA.xz',
+        'FASTA.xz' => 'FASTA.xz',
+        'fasta.zst' => 'FASTA.zst',
+        'FASTA.zst' => 'FASTA.zst',
+        'fasta.zstd' => 'FASTA.zst',
+        'FASTA.zstd' => 'FASTA.zst',
+
+        # Compressed multiFASTA formats
+        'multifasta.gz' => 'multiFASTA.gz',
+        'multiFASTA.gz' => 'multiFASTA.gz',
+        'multifasta.bz2' => 'multiFASTA.bz2',
+        'multiFASTA.bz2' => 'multiFASTA.bz2',
+        'multifasta.xz' => 'multiFASTA.xz',
+        'multiFASTA.xz' => 'multiFASTA.xz',
+        'multifasta.zst' => 'multiFASTA.zst',
+        'multiFASTA.zst' => 'multiFASTA.zst',
+        'multifasta.zstd' => 'multiFASTA.zst',
+        'multiFASTA.zstd' => 'multiFASTA.zst',
     );
 
     my $normalized = $format_aliases{$outfmt};
     return $normalized || '';
+}
+
+# Get compression type from format (e.g., 'TSV.gz' -> 'gz')
+sub get_compression_type {
+    my ($format) = @_;
+    if ($format =~ /\.(gz|bz2|xz|zst)$/i) {
+        return lc($1);
+    }
+    return undef;
+}
+
+# Get base format without compression suffix (e.g., 'TSV.gz' -> 'TSV')
+sub get_base_format {
+    my ($format) = @_;
+    $format =~ s/\.(gz|bz2|xz|zst)$//i;
+    return $format;
+}
+
+# Get compression command for a given compression type
+sub get_compression_command {
+    my ($type) = @_;
+
+    my %commands = (
+        'gz'  => 'pigz',
+        'bz2' => 'pbzip2',
+        'xz'  => 'xz',
+        'zst' => 'zstd',
+    );
+
+    return $commands{$type} || die "Unknown compression type: $type\n";
+}
+
+# Open output file, potentially with compression
+sub open_compressed_output_file {
+    my ($filename, $compression_type) = @_;
+    my $fh;
+
+    if ($filename eq '-' || $filename eq 'stdout' || $filename eq 'STDOUT') {
+        # Standard output
+        if ($compression_type) {
+            # Compressed stdout
+            my $cmd = get_compression_command($compression_type);
+            open($fh, "| $cmd") or die "Cannot pipe to $cmd: $!\n";
+        } else {
+            $fh = \*STDOUT;
+        }
+    } else {
+        # File output
+        if ($compression_type) {
+            my $cmd = get_compression_command($compression_type);
+            open($fh, "| $cmd > '$filename'") or die "Cannot open pipe to $cmd for $filename: $!\n";
+        } else {
+            open($fh, '>', $filename) or die "Cannot open $filename for writing: $!\n";
+        }
+    }
+
+    return $fh;
 }
 
 sub write_results_to_file_multi {
@@ -1594,18 +1732,24 @@ sub write_results_to_file_multi {
     my $prefix = $output_handles->{prefix};
     my $mode = $output_handles->{mode};
 
-    if ($format eq 'multiTSV') {
-        # Write to individual TSV file
-        my $filename = "${prefix}_${query_number}.tsv";
-        open my $fh, '>', $filename or die "Cannot open output file '$filename': $!\n";
+    # Get compression info from format
+    my $compression_type = get_compression_type($format);
+    my $base_format = get_base_format($format);
+
+    if ($base_format eq 'multiTSV') {
+        # Write to individual TSV file (possibly compressed)
+        my $ext = $compression_type ? ".tsv.$compression_type" : ".tsv";
+        my $filename = "${prefix}_${query_number}${ext}";
+        my $fh = open_compressed_output_file($filename, $compression_type);
         for my $result (@$results) {
             print $fh "$result\n";
         }
-        close $fh;
-    } elsif ($format eq 'FASTA' || $format eq 'multiFASTA') {
-        # Write to individual FASTA file (requires --mode=sequence)
-        my $filename = "${prefix}_${query_number}.fasta";
-        open my $fh, '>', $filename or die "Cannot open output file '$filename': $!\n";
+        close $fh unless ref($fh) eq 'GLOB' && $fh == \*STDOUT;
+    } elsif ($base_format eq 'FASTA' || $base_format eq 'multiFASTA') {
+        # Write to individual FASTA file (requires --mode=sequence, possibly compressed)
+        my $ext = $compression_type ? ".fasta.$compression_type" : ".fasta";
+        my $filename = "${prefix}_${query_number}${ext}";
+        my $fh = open_compressed_output_file($filename, $compression_type);
 
         # Parse TSV results and group by sequence
         my %seq_to_ids = ();
@@ -1627,39 +1771,17 @@ sub write_results_to_file_multi {
             print $fh ">$header\n";
             print $fh "$sequence\n";
         }
-        close $fh;
-    } elsif ($format eq 'BLASTDB') {
+        close $fh unless ref($fh) eq 'GLOB' && $fh == \*STDOUT;
+    } elsif ($base_format eq 'BLASTDB') {
         # Track query number for post-processing
         push @{$output_handles->{query_numbers}}, $query_number;
 
         if ($mode eq 'minimum') {
-            # Write TSV file (same as multiTSV)
-            my $filename = "${prefix}_${query_number}.tsv";
-            open my $fh, '>', $filename or die "Cannot open output file '$filename': $!\n";
-            for my $result (@$results) {
-                print $fh "$result\n";
-            }
-            close $fh;
+            # Extract accessions and create BLASTDB via pipe (no intermediate files)
+            create_blastdb_from_results_minimum($results, $prefix, $query_number, $output_handles->{seqid_db});
         } elsif ($mode eq 'sequence') {
-            # Write FASTA file for makeblastdb
-            my $filename = "${prefix}_${query_number}.fasta";
-            open my $fh, '>', $filename or die "Cannot open output file '$filename': $!\n";
-
-            for my $result (@$results) {
-                my @fields = split /\t/, $result;
-                my $seqid_str = $fields[2];  # Third column is seqid list
-                my $sequence = $fields[3] if defined $fields[3];  # Fourth column in sequence mode
-
-                if ($sequence && $seqid_str) {
-                    # Use the first seqid as FASTA header (without position suffix)
-                    my @seqids = split(/,/, $seqid_str);
-                    my $first_seqid = $seqids[0];
-                    $first_seqid =~ s/:\d+:\d+$//;  # Remove position suffix
-                    print $fh ">$first_seqid\n";
-                    print $fh "$sequence\n";
-                }
-            }
-            close $fh;
+            # Create BLASTDB via pipe directly from results (no FASTA file)
+            create_blastdb_from_results_sequence($results, $prefix, $query_number);
         }
     }
 }
@@ -1866,80 +1988,66 @@ sub validate_server_connectivity {
 sub create_blastdb_files {
     my ($output_handles) = @_;
 
-    my $prefix = $output_handles->{prefix};
-    my $mode = $output_handles->{mode};
-    my $seqid_db = $output_handles->{seqid_db};
-    my @query_numbers = @{$output_handles->{query_numbers}};
-
-    print STDERR "Post-processing " . scalar(@query_numbers) . " query results...\n";
-
-    # Fork child processes for parallel execution
-    my %children = ();
-    my $max_parallel = $numthreads > 0 ? $numthreads : 1;
-
-    for my $query_number (@query_numbers) {
-        # Wait if we have too many children
-        while (scalar(keys %children) >= $max_parallel) {
-            my $finished_pid = waitpid(-1, 0);
-            if ($finished_pid > 0) {
-                my $exit_code = $? >> 8;
-                my $qn = delete $children{$finished_pid};
-                if ($exit_code != 0) {
-                    warn "Warning: BLASTDB creation for query $qn failed with exit code $exit_code\n";
-                } else {
-                    print STDERR "  Completed BLASTDB for query $qn\n";
-                }
-            }
-        }
-
-        my $pid = fork();
-        if (!defined $pid) {
-            die "Cannot fork for BLASTDB creation: $!\n";
-        } elsif ($pid == 0) {
-            # Child process
-            if ($mode eq 'minimum') {
-                create_blastdb_from_tsv($prefix, $query_number, $seqid_db);
-            } elsif ($mode eq 'sequence') {
-                create_blastdb_from_fasta($prefix, $query_number);
-            }
-            exit 0;
-        } else {
-            # Parent process
-            $children{$pid} = $query_number;
-        }
+    # BLASTDB creation is now done inline via pipe in write_results_to_file
+    # This function is kept for compatibility but does nothing
+    my @query_numbers = @{$output_handles->{query_numbers} || []};
+    if (@query_numbers > 0) {
+        print STDERR "BLASTDB creation completed for " . scalar(@query_numbers) . " queries.\n";
     }
-
-    # Wait for remaining children
-    while (scalar(keys %children) > 0) {
-        my $finished_pid = waitpid(-1, 0);
-        if ($finished_pid > 0) {
-            my $exit_code = $? >> 8;
-            my $qn = delete $children{$finished_pid};
-            if ($exit_code != 0) {
-                warn "Warning: BLASTDB creation for query $qn failed with exit code $exit_code\n";
-            } else {
-                print STDERR "  Completed BLASTDB for query $qn\n";
-            }
-        }
-    }
-
-    print STDERR "BLASTDB creation completed.\n";
 }
 
-sub create_blastdb_from_tsv {
-    my ($prefix, $query_number, $seqid_db) = @_;
+# Create BLASTDB from results using pipe (mode=sequence)
+# Pipes FASTA data directly to makeblastdb without intermediate file
+sub create_blastdb_from_results_sequence {
+    my ($results, $prefix, $query_number) = @_;
 
-    my $tsv_file = "${prefix}_${query_number}.tsv";
-    my $acclist_file = "${prefix}_${query_number}.acclist";
+    my $db_name = "${prefix}_${query_number}";
+
+    # Open pipe to makeblastdb
+    my @cmd = (
+        'makeblastdb',
+        '-dbtype', 'nucl',
+        '-input_type', 'fasta',
+        '-hash_index',
+        '-parse_seqids',
+        '-max_file_sz', '4G',
+        '-in', '-',  # Read from stdin
+        '-out', $db_name,
+        '-title', "${prefix}_${query_number}"
+    );
+
+    open my $pipe, '|-', @cmd or die "Cannot open pipe to makeblastdb: $!\n";
+
+    for my $result (@$results) {
+        my @fields = split /\t/, $result;
+        my $seqid_str = $fields[2];  # Third column is seqid list
+        my $sequence = $fields[3] if defined $fields[3];  # Fourth column in sequence mode
+
+        if ($sequence && $seqid_str) {
+            # Use the first seqid as FASTA header (without position suffix)
+            my @seqids = split(/,/, $seqid_str);
+            my $first_seqid = $seqids[0];
+            $first_seqid =~ s/:\d+:\d+$//;  # Remove position suffix
+            print $pipe ">$first_seqid\n";
+            print $pipe "$sequence\n";
+        }
+    }
+
+    close $pipe or die "makeblastdb failed for query $query_number: $!\n";
+}
+
+# Create BLASTDB from results using pipe (mode=minimum)
+# Pipes accession list directly to blastdb_aliastool without intermediate file
+sub create_blastdb_from_results_minimum {
+    my ($results, $prefix, $query_number, $seqid_db) = @_;
+
     my $bsl_file = "${prefix}_${query_number}.bsl";
     my $nal_file = "${prefix}_${query_number}";
 
-    # Step 1: Extract accession numbers from TSV file
+    # Step 1: Extract unique accession numbers from results
     my %acc = ();
-    open my $tsv_fh, '<', $tsv_file or die "Cannot open TSV file '$tsv_file': $!\n";
-    while (my $line = <$tsv_fh>) {
-        chomp $line;
-        my @fields = split /\t/, $line;
+    for my $result (@$results) {
+        my @fields = split /\t/, $result;
         next unless @fields >= 3;
         my $seqidlist = $fields[2];  # Third column is seqid list
         foreach my $seqid (split(/,/, $seqidlist)) {
@@ -1947,30 +2055,24 @@ sub create_blastdb_from_tsv {
             $acc{$seqid} = 1;
         }
     }
-    close $tsv_fh;
 
-    # Step 2: Write accession list file
-    open my $acc_fh, '>', $acclist_file or die "Cannot open accession list file '$acclist_file': $!\n";
-    for my $accession (sort keys %acc) {
-        print $acc_fh "$accession\n";
-    }
-    close $acc_fh;
-
-    # Step 3: Create BSL file using blastdb_aliastool
+    # Step 2: Create BSL file using blastdb_aliastool via pipe
     my @bsl_cmd = (
         'blastdb_aliastool',
         '-seqid_dbtype', 'nucl',
         '-seqid_db', $seqid_db,
-        '-seqid_file_in', $acclist_file,
+        '-seqid_file_in', '/dev/stdin',
         '-seqid_title', "${prefix}_${query_number}",
         '-seqid_file_out', $bsl_file
     );
-    my $bsl_result = system(@bsl_cmd);
-    if ($bsl_result != 0) {
-        die "blastdb_aliastool (BSL) failed for query $query_number: exit code " . ($bsl_result >> 8) . "\n";
-    }
 
-    # Step 4: Create NAL file using blastdb_aliastool
+    open my $pipe, '|-', @bsl_cmd or die "Cannot open pipe to blastdb_aliastool: $!\n";
+    for my $accession (sort keys %acc) {
+        print $pipe "$accession\n";
+    }
+    close $pipe or die "blastdb_aliastool (BSL) failed for query $query_number: $!\n";
+
+    # Step 3: Create NAL file using blastdb_aliastool
     my @nal_cmd = (
         'blastdb_aliastool',
         '-dbtype', 'nucl',
@@ -1982,29 +2084,5 @@ sub create_blastdb_from_tsv {
     my $nal_result = system(@nal_cmd);
     if ($nal_result != 0) {
         die "blastdb_aliastool (NAL) failed for query $query_number: exit code " . ($nal_result >> 8) . "\n";
-    }
-}
-
-sub create_blastdb_from_fasta {
-    my ($prefix, $query_number) = @_;
-
-    my $fasta_file = "${prefix}_${query_number}.fasta";
-    my $db_name = "${prefix}_${query_number}";
-
-    # Create BLASTDB using makeblastdb
-    my @cmd = (
-        'makeblastdb',
-        '-dbtype', 'nucl',
-        '-input_type', 'fasta',
-        '-hash_index',
-        '-parse_seqids',
-        '-max_file_sz', '4G',
-        '-in', $fasta_file,
-        '-out', $db_name,
-        '-title', "${prefix}_${query_number}"
-    );
-    my $result = system(@cmd);
-    if ($result != 0) {
-        die "makeblastdb failed for query $query_number: exit code " . ($result >> 8) . "\n";
     }
 }

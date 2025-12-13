@@ -12,9 +12,11 @@ use File::Basename;
 use MIME::Base64;
 use Time::HiRes qw(time);
 use Fcntl qw(:flock);
+use IO::Compress::Gzip qw(gzip $GzipError);
+use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
 
 # Version number
-my $VERSION = "1.0.0";
+my $VERSION = "__VERSION__";
 
 # Default values - Configure these for your environment
 # These values will be used when not specified in API requests
@@ -474,49 +476,80 @@ sub send_error_response {
 }
 
 sub send_success_response {
-    my ($self, $data) = @_;
-    
+    my ($self, $data, $cgi) = @_;
+
+    # Check if client accepts gzip encoding
+    my $accept_encoding = $cgi ? ($cgi->http('Accept-Encoding') || '') : '';
+    my $use_gzip = ($accept_encoding =~ /gzip/i);
+
+    # Add success field to response
+    $data->{success} = JSON::true;
+    my $json_body = encode_json($data);
+
     print "Status: 200 OK\r\n";
     print "Content-Type: application/json\r\n";
     print "Access-Control-Allow-Origin: *\r\n";
     print "Access-Control-Allow-Methods: POST, OPTIONS\r\n";
-    print "Access-Control-Allow-Headers: Content-Type\r\n";
-    
+    print "Access-Control-Allow-Headers: Content-Type, Accept-Encoding\r\n";
+
     # Add rate limit headers
     my $current_jobs = $self->get_current_job_count();
     print "X-Job-Queue-Size: $current_jobs\r\n";
     print "X-Job-Queue-Limit: " . $self->{max_jobs} . "\r\n";
-    print "\r\n";
-    
-    # Add success field to response
-    $data->{success} = JSON::true;
-    print encode_json($data);
+
+    if ($use_gzip && length($json_body) > 100) {
+        # Compress response body
+        my $compressed;
+        if (gzip(\$json_body => \$compressed)) {
+            print "Content-Encoding: gzip\r\n";
+            print "\r\n";
+            binmode STDOUT;
+            print $compressed;
+        } else {
+            # Fallback to uncompressed on error
+            print "\r\n";
+            print $json_body;
+        }
+    } else {
+        print "\r\n";
+        print $json_body;
+    }
 }
 
 sub parse_json_request {
     my ($self, $cgi) = @_;
-    
+
     my $content_type = $cgi->http('Content-Type') || '';
-    
+    my $content_encoding = $cgi->http('Content-Encoding') || '';
+
     if ($content_type !~ m{application/json}i) {
         die "Content-Type must be application/json";
     }
-    
-    my $json_text;
+
+    my $raw_content;
     if ($ENV{REQUEST_METHOD} eq 'POST') {
-        $json_text = $cgi->param('POSTDATA');
+        $raw_content = $cgi->param('POSTDATA');
     }
-    
-    if (!$json_text) {
+
+    if (!$raw_content) {
         # Try reading from STDIN
         local $/;
-        $json_text = <STDIN>;
+        $raw_content = <STDIN>;
     }
-    
-    if (!$json_text) {
+
+    if (!$raw_content) {
         die "No JSON data received";
     }
-    
+
+    # Decompress if gzip-encoded
+    my $json_text;
+    if ($content_encoding =~ /gzip/i) {
+        IO::Uncompress::Gunzip::gunzip(\$raw_content => \$json_text)
+            or die "Failed to decompress gzip request: $IO::Uncompress::Gunzip::GunzipError";
+    } else {
+        $json_text = $raw_content;
+    }
+
     my $data = decode_json($json_text);
     return $data;
 }
@@ -723,18 +756,19 @@ sub handle_cancel_request {
 
 sub handle_metadata_request {
     my ($self, $cgi) = @_;
-    
+
     eval {
         $self->send_success_response({
             default_database => $default_database,
             default_subset => $default_subset,
             default_maxnseq => $default_maxnseq,
             default_minscore => $default_minscore,
-            server_version => "1.0",
+            server_version => $VERSION,
+            accept_gzip_request => JSON::true,
             supported_endpoints => ["/search", "/result", "/status", "/cancel", "/metadata"]
-        });
+        }, $cgi);
     };
-    
+
     if ($@) {
         $self->send_error_response(500, "INTERNAL_ERROR", "Server error: $@");
     }
@@ -1147,9 +1181,24 @@ sub perform_database_search {
         $sth->execute();
         my ($table_count) = $sth->fetchrow_array();
         $sth->finish();
-        
-        die "Table 'kafsss_data' does not exist in database '$request->{db}'\n" 
+
+        die "Table 'kafsss_data' does not exist in database '$request->{db}'\n"
             unless $table_count > 0;
+
+        # Check if database has k-mer indexes (seq column GIN index)
+        $sth = $dbh->prepare(<<SQL);
+SELECT 1 FROM pg_indexes
+WHERE tablename = 'kafsss_data'
+  AND indexname LIKE 'idx_kafsss_data_seq_gin_km%'
+LIMIT 1
+SQL
+        $sth->execute();
+        my $has_kmer_index = $sth->fetchrow_array();
+        $sth->finish();
+
+        die "Database '$request->{db}' does not have k-mer indexes.\n" .
+            "Please create indexes first using: kafssindex --mode=create $request->{db}\n"
+            unless $has_kmer_index;
     };
     
     if ($@) {
