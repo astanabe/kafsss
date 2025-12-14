@@ -1586,19 +1586,35 @@ sub validate_database_permissions {
 
 sub validate_database_schema {
     my ($dbh) = @_;
-    
+
     # Check if required tables exist
     my @required_tables = ('kafsss_meta', 'kafsss_data');
-    
+
     for my $table (@required_tables) {
         my $sth = $dbh->prepare("SELECT 1 FROM information_schema.tables WHERE table_name = ?");
         $sth->execute($table);
         my $table_exists = $sth->fetchrow_array();
         $sth->finish();
-        
+
         unless ($table_exists) {
             die "Error: Required table '$table' does not exist in database.\n";
         }
+    }
+
+    # Check if database has k-mer indexes (seq column GIN index)
+    my $sth = $dbh->prepare(<<SQL);
+SELECT 1 FROM pg_indexes
+WHERE tablename = 'kafsss_data'
+  AND indexname LIKE 'idx_kafsss_data_seq_gin_km%'
+LIMIT 1
+SQL
+    $sth->execute();
+    my $has_kmer_index = $sth->fetchrow_array();
+    $sth->finish();
+
+    unless ($has_kmer_index) {
+        die "Error: Database does not have k-mer indexes.\n" .
+            "Please create indexes first using: kafssindex --mode=create <database>\n";
     }
 }
 
