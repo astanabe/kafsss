@@ -633,3 +633,321 @@ CREATE TABLE IF NOT EXISTS kafsssearchserver_jobs (
 - `kmersearch_highfreq_kmer_meta`テーブルに一致するエントリがあれば`preclude_highfreq_kmer=true`でインデックス作成
 - 一致するエントリがなければ`preclude_highfreq_kmer=false`でインデックス作成（エラーではなく警告のみで続行）
 - これにより、同じパラメータでも`phkT`と`phkF`の両方のインデックスが存在する可能性がある
+
+---
+
+# Part 3: ドキュメント更新
+
+## CLAUDE.md の更新
+
+### 更新箇所
+
+#### 1. Performance Parameters セクション
+
+以下の説明を追加:
+
+```markdown
+### Multiple GIN Index Selection
+
+When multiple GIN indexes exist on the `seq` column, kafsssearch and kafsssearchserver.* can select the appropriate index based on parameters:
+
+**kafsssearch.pl options:**
+- `--kmersize=INT` - K-mer size for index selection
+- `--occurbitlen=INT` - Occurrence bit length
+- `--maxpappear=REAL` - Max appearance rate (max 3 decimal places)
+- `--maxnappear=INT` - Max appearance nrow
+- `--precludehighfreqkmer` - Use index with preclude_highfreq_kmer=true
+
+**Selection logic:**
+- If only one GIN index exists, it is automatically selected
+- If multiple indexes exist and parameters match exactly one, that index is used
+- If multiple indexes match, an error is returned requesting additional parameters
+- If no indexes match, an error is returned
+```
+
+#### 2. Server Configuration セクション
+
+以下の説明を追加:
+
+```markdown
+### Server Multi-Database Configuration
+
+Server components support multiple databases and GIN indexes:
+
+**Configuration variables:**
+- `@available_databases` - Array of available database names
+- `@available_subsets` - Array of "database_name:subset_name" format strings
+- `$default_database` - Default database name
+- `$default_subset` - Default subset in "database_name:subset_name" format
+- `$default_kmersize`, `$default_occurbitlen`, `$default_maxpappear`, `$default_maxnappear`, `$default_precludehighfreqkmer` - Default GIN index parameters
+
+**Startup validation:**
+- All databases in @available_databases are validated for kafsss_data, kafsss_meta, and GIN indexes
+- All subsets in @available_subsets are validated for existence
+- Default database must have exactly one GIN index matching default parameters
+```
+
+#### 3. API endpoints セクション
+
+既存のエンドポイント説明を拡張:
+
+```markdown
+### Extended API Endpoints
+
+**GET /metadata** response includes:
+- `available_databases`: Array of available database names
+- `available_subsets`: Array of "database_name:subset_name" strings
+- `available_indices`: Array of "database_name:index_name" strings
+- `default_kmersize`, `default_occurbitlen`, `default_maxpappear`, `default_maxnappear`, `default_precludehighfreqkmer`
+
+**POST /search** request accepts:
+- `database` or `db`: Target database name (mutually exclusive)
+- `index`: Direct GIN index name specification (mutually exclusive with individual params)
+- `kmersize`, `occurbitlen`, `maxpappear`, `maxnappear`, `precludehighfreqkmer`: Index selection parameters
+
+**POST /result, POST /status** response includes:
+- `database`, `subset`, `index`, `kmersize`, `occurbitlen`, `maxpappear`, `maxnappear`, `precludehighfreqkmer`, `maxnseq`, `minscore`
+```
+
+---
+
+## README.md の更新
+
+### 更新箇所
+
+Featuresセクションに以下を追加:
+
+```markdown
+- **Multiple GIN Index Support**: Select from multiple k-mer indexes with different parameters
+- **Multi-Database Servers**: Server components support multiple databases with load balancing
+```
+
+Quick Startセクションに複数インデックスの例を追加:
+
+```markdown
+# Search with specific index parameters (when multiple indexes exist)
+kafsssearch --db=mydb --kmersize=8 --precludehighfreqkmer query.fasta results.tsv
+```
+
+---
+
+## doc/kafsss.en.md の更新
+
+### 更新箇所
+
+#### 1. kafsssearch セクション
+
+Optionsに以下を追加:
+
+```markdown
+- `--kmersize=INT` - K-mer size for index selection (optional, auto-detected if only one index)
+- `--occurbitlen=INT` - Occurrence bit length for index selection
+- `--maxpappear=REAL` - Max appearance rate for index selection (max 3 decimal places)
+- `--maxnappear=INT` - Max appearance nrow for index selection
+- `--precludehighfreqkmer` - Select index with preclude_highfreq_kmer=true
+```
+
+Multiple Index Selectionサブセクションを追加:
+
+```markdown
+#### Multiple Index Selection
+
+When multiple GIN indexes exist on the kafsss_data.seq column:
+
+- **Single index**: Automatically selected, no parameters needed
+- **Multiple indexes**: Specify parameters to narrow down to one index
+- **Partial specification allowed**: Only specify parameters needed to uniquely identify the index
+
+Examples:
+```bash
+# Single index - no parameters needed
+kafsssearch --db=mydb query.fasta results.tsv
+
+# Multiple indexes - specify kmersize to narrow down
+kafsssearch --db=mydb --kmersize=8 query.fasta results.tsv
+
+# Multiple indexes with same kmersize - add precludehighfreqkmer
+kafsssearch --db=mydb --kmersize=8 --precludehighfreqkmer query.fasta results.tsv
+```
+```
+
+#### 2. kafsssearchserver.* セクション
+
+Configurationサブセクションを拡張:
+
+```markdown
+#### Multi-Database Configuration
+
+Edit default values in the script header:
+```perl
+# Database configuration
+my @available_databases = ('mykmersearch', 'otherdb');
+my @available_subsets = ('mykmersearch:bacteria', 'mykmersearch:virus');
+my $default_database = 'mykmersearch';
+my $default_subset = 'mykmersearch:bacteria';
+
+# GIN index parameters
+my $default_kmersize = 8;
+my $default_occurbitlen = 8;
+my $default_maxpappear = 0.05;
+my $default_maxnappear = 0;
+my $default_precludehighfreqkmer = 1;
+```
+```
+
+API Endpointsサブセクションを拡張:
+
+```markdown
+**GET /metadata** - Extended response
+
+Response JSON:
+```json
+{
+  "success": true,
+  "server_version": "1.0.0",
+  "default_database": "mykmersearch",
+  "default_subset": "mykmersearch:bacteria",
+  "default_kmersize": 8,
+  "default_occurbitlen": 8,
+  "default_maxpappear": 0.05,
+  "default_maxnappear": 0,
+  "default_precludehighfreqkmer": true,
+  "available_databases": ["mykmersearch", "otherdb"],
+  "available_subsets": ["mykmersearch:bacteria", "mykmersearch:virus"],
+  "available_indices": ["mykmersearch:idx_kafsss_data_seq_gin_km8_ob8_mar0500_man0_phkT"],
+  "accept_gzip_request": true
+}
+```
+
+**POST /search** - Extended request
+
+Request JSON:
+```json
+{
+  "queryseq": "ATCGATCG...",
+  "querylabel": "sequence_name",
+  "database": "mykmersearch",
+  "subset": "bacteria",
+  "index": "idx_kafsss_data_seq_gin_km8_ob8_mar0500_man0_phkT",
+  "kmersize": 8,
+  "occurbitlen": 8,
+  "maxpappear": 0.05,
+  "maxnappear": 0,
+  "precludehighfreqkmer": true,
+  "maxnseq": 1000,
+  "minscore": 10
+}
+```
+
+Notes:
+- `database` and `db` are mutually exclusive
+- `index` and individual parameters (kmersize, etc.) are mutually exclusive
+- If `index` is specified, parameters are extracted from the index name
+
+**POST /result, POST /status** - Extended response
+
+Response includes job parameters:
+```json
+{
+  "job_id": "...",
+  "status": "completed",
+  "database": "mykmersearch",
+  "subset": "bacteria",
+  "index": "idx_kafsss_data_seq_gin_km8_ob8_mar0500_man0_phkT",
+  "kmersize": 8,
+  "occurbitlen": 8,
+  "maxpappear": 0.05,
+  "maxnappear": 0,
+  "precludehighfreqkmer": true,
+  "maxnseq": 1000,
+  "minscore": 10,
+  "results": [...]
+}
+```
+```
+
+---
+
+## doc/kafsss.ja.md の更新
+
+### 更新箇所
+
+doc/kafsss.en.mdと同様の内容を日本語で記述:
+
+#### 1. kafsssearch セクション
+
+オプションに以下を追加:
+
+```markdown
+- `--kmersize=INT` - インデックス選択用k-merサイズ（オプション、インデックスが1つの場合は自動検出）
+- `--occurbitlen=INT` - インデックス選択用出現ビット長
+- `--maxpappear=REAL` - インデックス選択用最大出現率（小数点以下3桁まで）
+- `--maxnappear=INT` - インデックス選択用最大出現行数
+- `--precludehighfreqkmer` - preclude_highfreq_kmer=trueのインデックスを選択
+```
+
+複数インデックス選択サブセクションを追加:
+
+```markdown
+#### 複数インデックス選択
+
+kafsss_data.seqカラムに複数のGINインデックスが存在する場合:
+
+- **単一インデックス**: 自動的に選択、パラメータ指定不要
+- **複数インデックス**: パラメータを指定して1つに絞り込み
+- **部分指定可能**: 一意に特定できる最小限のパラメータ指定で可
+
+使用例:
+```bash
+# 単一インデックス - パラメータ不要
+kafsssearch --db=mydb query.fasta results.tsv
+
+# 複数インデックス - kmersizeで絞り込み
+kafsssearch --db=mydb --kmersize=8 query.fasta results.tsv
+
+# 同じkmersizeの複数インデックス - precludehighfreqkmerを追加
+kafsssearch --db=mydb --kmersize=8 --precludehighfreqkmer query.fasta results.tsv
+```
+```
+
+#### 2. kafsssearchserver.* セクション
+
+設定サブセクションを拡張:
+
+```markdown
+#### 複数データベース設定
+
+スクリプトヘッダーでデフォルト値を編集:
+```perl
+# データベース設定
+my @available_databases = ('mykmersearch', 'otherdb');
+my @available_subsets = ('mykmersearch:bacteria', 'mykmersearch:virus');
+my $default_database = 'mykmersearch';
+my $default_subset = 'mykmersearch:bacteria';
+
+# GINインデックスパラメータ
+my $default_kmersize = 8;
+my $default_occurbitlen = 8;
+my $default_maxpappear = 0.05;
+my $default_maxnappear = 0;
+my $default_precludehighfreqkmer = 1;
+```
+```
+
+APIエンドポイントサブセクションを拡張（doc/kafsss.en.mdのJSON例と同様、説明文を日本語化）
+
+---
+
+## ドキュメント更新の実施順序
+
+1. `CLAUDE.md` - 開発者向け技術情報の更新
+2. `README.md` - 概要とFeatures、Quick Startの更新
+3. `doc/kafsss.en.md` - 詳細英語ドキュメントの更新
+4. `doc/kafsss.ja.md` - 詳細日本語ドキュメントの更新
+
+## ドキュメント更新の注意点
+
+- 既存のセクション構造を維持
+- 新機能は既存の関連セクション内に追加
+- JSON例は実際の実装と一致させる
+- 日本語ドキュメントは英語版と同等の情報量を維持
