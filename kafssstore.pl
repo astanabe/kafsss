@@ -162,13 +162,51 @@ if ($tablespace) {
 my $db_exists = check_database_exists($dbh, $output_db);
 
 if ($db_exists && !$overwrite) {
-    # Validate existing database
-    my $validation_result = validate_existing_database($dbh, $output_db);
+    # Validate existing database with retry logic for initialization in progress
+    my $max_retries = 10;
+    my $retry_interval = 5;
+    my $validation_result;
+
+    for my $attempt (1..$max_retries) {
+        $validation_result = validate_existing_database($dbh, $output_db);
+
+        if ($validation_result == -2) {
+            # Tables not ready: another process may be initializing
+            print "Database schema not ready (attempt $attempt/$max_retries), waiting for initialization lock...\n";
+
+            # Connect to target database to wait for initialization lock
+            my $temp_dsn = "DBI:Pg:dbname=$output_db;host=$host;port=$port";
+            my $temp_dbh = DBI->connect($temp_dsn, $username, $password, {
+                AutoCommit => 1,
+                PrintError => 0,
+                RaiseError => 0,
+                AutoInactiveDestroy => 1,
+            });
+
+            if ($temp_dbh) {
+                # Wait for initialization lock (blocking) - this ensures we wait for setup_database to complete
+                eval {
+                    $temp_dbh->do("SELECT pg_advisory_lock(1000)");
+                    $temp_dbh->do("SELECT pg_advisory_unlock(1000)");
+                };
+                $temp_dbh->disconnect();
+            } else {
+                # Cannot connect yet, wait and retry
+                sleep($retry_interval);
+            }
+            next;
+        }
+        last;  # Exit loop for any result other than -2
+    }
+
     if ($validation_result == 1) {
         print "Using existing database '$output_db'\n";
     } elsif ($validation_result == -1) {
         die "Existing database '$output_db' has indexes. Cannot add data while indexes exist.\n" .
             "To add data, first drop indexes using: kafssindex --mode=drop $output_db\n";
+    } elsif ($validation_result == -2) {
+        die "Database schema still not ready after $max_retries attempts (${retry_interval}s intervals).\n" .
+            "Another process may have failed during initialization.\n";
     } else {
         die "Existing database '$output_db' is not compatible. Parameter mismatch detected.\n" .
             "Use --overwrite to recreate database, or adjust parameters to match existing database.\n" .
@@ -180,14 +218,76 @@ if ($db_exists && !$overwrite) {
         print "Dropping existing database '$output_db'\n";
         $dbh->do("DROP DATABASE \"$output_db\"");
     }
-    
+
     # Create new database
     print "Creating database '$output_db'\n";
     my $create_db_sql = "CREATE DATABASE \"$output_db\"";
     if ($tablespace) {
         $create_db_sql .= " TABLESPACE \"$tablespace\"";
     }
-    $dbh->do($create_db_sql);
+
+    eval {
+        $dbh->do($create_db_sql);
+    };
+    if ($@) {
+        # Check if database was created by another process
+        if (check_database_exists($dbh, $output_db)) {
+            print "Database '$output_db' was created by another process, continuing...\n";
+            # Validate the database created by another process with retry logic
+            my $max_retries = 10;
+            my $retry_interval = 5;
+            my $validation_result;
+
+            for my $attempt (1..$max_retries) {
+                $validation_result = validate_existing_database($dbh, $output_db);
+
+                if ($validation_result == -2) {
+                    # Tables not ready: another process may be initializing
+                    print "Database schema not ready (attempt $attempt/$max_retries), waiting for initialization lock...\n";
+
+                    # Connect to target database to wait for initialization lock
+                    my $temp_dsn = "DBI:Pg:dbname=$output_db;host=$host;port=$port";
+                    my $temp_dbh = DBI->connect($temp_dsn, $username, $password, {
+                        AutoCommit => 1,
+                        PrintError => 0,
+                        RaiseError => 0,
+                        AutoInactiveDestroy => 1,
+                    });
+
+                    if ($temp_dbh) {
+                        # Wait for initialization lock (blocking) - this ensures we wait for setup_database to complete
+                        eval {
+                            $temp_dbh->do("SELECT pg_advisory_lock(1000)");
+                            $temp_dbh->do("SELECT pg_advisory_unlock(1000)");
+                        };
+                        $temp_dbh->disconnect();
+                    } else {
+                        # Cannot connect yet, wait and retry
+                        sleep($retry_interval);
+                    }
+                    next;
+                }
+                last;  # Exit loop for any result other than -2
+            }
+
+            if ($validation_result == 1) {
+                print "Using database '$output_db' created by another process\n";
+            } elsif ($validation_result == -1) {
+                die "Database '$output_db' has indexes. Cannot add data while indexes exist.\n" .
+                    "To add data, first drop indexes using: kafssindex --mode=drop $output_db\n";
+            } elsif ($validation_result == -2) {
+                die "Database schema still not ready after $max_retries attempts (${retry_interval}s intervals).\n" .
+                    "Another process may have failed during initialization.\n";
+            } else {
+                die "Database '$output_db' is not compatible. Parameter mismatch detected.\n" .
+                    "Check minlen ($minlen), minsplitlen ($minsplitlen), ovllen ($ovllen), and datatype ($datatype).\n";
+            }
+            # Mark as existing for later logic
+            $db_exists = 1;
+        } else {
+            die "Failed to create database '$output_db': $@\n";
+        }
+    }
 }
 
 # Disconnect from server and connect to target database
@@ -204,19 +304,34 @@ $dbh = DBI->connect($dsn, $username, $password, {
     pg_enable_utf8 => 1
 }) or die "Cannot connect to database '$output_db': $DBI::errstr\n";
 
-# Acquire advisory lock for exclusive access to prevent conflicts with other tools
-print "Acquiring exclusive lock...\n";
-eval {
-    $dbh->do("SELECT pg_advisory_xact_lock(999)");
-    print "Exclusive lock acquired.\n";
-};
-if ($@) {
-    die "Failed to acquire advisory lock: $@\n";
-}
-
-# Setup database if new or overwritten
+# Setup database if new or overwritten (with exclusive control)
 if (!$db_exists || $overwrite) {
-    setup_database($dbh);
+    # Try to acquire initialization lock (session-level advisory lock)
+    print "Acquiring initialization lock...\n";
+    my ($got_lock) = $dbh->selectrow_array("SELECT pg_try_advisory_lock(1000)");
+
+    if ($got_lock) {
+        # Lock acquired: this process will initialize
+        # But first check if another process already completed initialization
+        my $tables_exist = check_tables_already_exist($dbh);
+        if (!$tables_exist) {
+            print "Initializing database schema...\n";
+            setup_database($dbh);
+        } else {
+            print "Tables already created by another process, skipping setup.\n";
+        }
+        # Release initialization lock
+        $dbh->do("SELECT pg_advisory_unlock(1000)");
+        print "Initialization lock released.\n";
+    } else {
+        # Lock not acquired: another process is initializing
+        print "Another process is initializing database, waiting for completion...\n";
+        # Wait for initialization to complete (blocking lock)
+        $dbh->do("SELECT pg_advisory_lock(1000)");
+        # Immediately release the lock (we just needed to wait)
+        $dbh->do("SELECT pg_advisory_unlock(1000)");
+        print "Initialization completed by another process.\n";
+    }
 }
 
 # Process FASTA files
@@ -364,13 +479,27 @@ EOF
 
 sub check_database_exists {
     my ($dbh, $dbname) = @_;
-    
+
     my $sth = $dbh->prepare("SELECT 1 FROM pg_database WHERE datname = ?");
     $sth->execute($dbname);
     my $result = $sth->fetchrow_array();
     $sth->finish();
-    
+
     return defined $result;
+}
+
+sub check_tables_already_exist {
+    my ($dbh) = @_;
+
+    my $sth = $dbh->prepare(<<SQL);
+SELECT COUNT(*) FROM information_schema.tables
+WHERE table_schema = 'public' AND table_name IN ('kafsss_meta', 'kafsss_data')
+SQL
+    $sth->execute();
+    my ($count) = $sth->fetchrow_array();
+    $sth->finish();
+
+    return $count == 2;
 }
 
 sub validate_existing_database {
@@ -392,23 +521,37 @@ sub validate_existing_database {
     return 0 unless $temp_dbh;
     
     # Check if pg_kmersearch extension exists
+    # Return -2 if not exists (database initialization in progress by another process)
     my $sth = $temp_dbh->prepare("SELECT 1 FROM pg_extension WHERE extname = 'pg_kmersearch'");
     $sth->execute();
     my $ext_exists = $sth->fetchrow_array();
     $sth->finish();
-    return 0 unless $ext_exists;
-    
+    unless ($ext_exists) {
+        $temp_dbh->disconnect();
+        return -2;  # Extension not yet created, initialization in progress
+    }
+
     # Check if required tables exist with correct schema
-    return 0 unless check_meta_table_schema($temp_dbh);
-    return 0 unless check_main_table_schema($temp_dbh);
-    
+    # Return -2 if tables don't exist (initialization in progress)
+    unless (check_meta_table_schema($temp_dbh)) {
+        $temp_dbh->disconnect();
+        return -2;  # Tables not yet created, initialization in progress
+    }
+    unless (check_main_table_schema($temp_dbh)) {
+        $temp_dbh->disconnect();
+        return -2;  # Tables not yet created, initialization in progress
+    }
+
     # Check meta table values
     $sth = $temp_dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen FROM kafsss_meta LIMIT 1");
     $sth->execute();
     my ($db_ver, $db_minlen, $db_minsplitlen, $db_ovllen) = $sth->fetchrow_array();
     $sth->finish();
-    
-    return 0 unless defined $db_ver && defined $db_minlen && defined $db_minsplitlen && defined $db_ovllen;
+
+    unless (defined $db_ver && defined $db_minlen && defined $db_minsplitlen && defined $db_ovllen) {
+        $temp_dbh->disconnect();
+        return -2;  # Meta data not yet inserted, initialization in progress
+    }
     
     # Check parameter compatibility with detailed error messages
     if ($db_ver ne $VERSION) {
@@ -464,7 +607,11 @@ SQL
     
     $temp_dbh->disconnect();
     
-    # Return -1 if indexes exist, 1 if valid, 0 if invalid
+    # Return values:
+    #   1: Valid database, ready to use
+    #   0: Invalid (parameter mismatch)
+    #  -1: Indexes exist (cannot add data)
+    #  -2: Initialization in progress (tables/extension not ready)
     return $index_exists ? -1 : 1;
 }
 
@@ -490,18 +637,20 @@ SQL
         'kmer_size' => 'integer',
         'occur_bitlen' => 'integer',
         'max_appearance_rate' => 'real',
-        'max_appearance_nrow' => 'integer'
+        'max_appearance_nrow' => 'integer',
+        'preclude_highfreq_kmer' => 'boolean',
+        'seq_index_name' => 'text'
     );
-    
+
     my %actual = ();
     while (my ($col, $type) = $sth->fetchrow_array()) {
         $actual{$col} = $type;
     }
     $sth->finish();
-    
-    return %actual == %expected && 
-           $actual{ver} eq $expected{ver} && 
-           $actual{minlen} eq $expected{minlen} && 
+
+    return %actual == %expected &&
+           $actual{ver} eq $expected{ver} &&
+           $actual{minlen} eq $expected{minlen} &&
            $actual{ovllen} eq $expected{ovllen} &&
            $actual{nseq} eq $expected{nseq} &&
            $actual{nchar} eq $expected{nchar} &&
@@ -509,7 +658,9 @@ SQL
            $actual{kmer_size} eq $expected{kmer_size} &&
            $actual{occur_bitlen} eq $expected{occur_bitlen} &&
            $actual{max_appearance_rate} eq $expected{max_appearance_rate} &&
-           $actual{max_appearance_nrow} eq $expected{max_appearance_nrow};
+           $actual{max_appearance_nrow} eq $expected{max_appearance_nrow} &&
+           $actual{preclude_highfreq_kmer} eq $expected{preclude_highfreq_kmer} &&
+           $actual{seq_index_name} eq $expected{seq_index_name};
 }
 
 sub check_main_table_schema {
@@ -563,7 +714,9 @@ CREATE TABLE IF NOT EXISTS kafsss_meta (
     kmer_size INTEGER,
     occur_bitlen INTEGER,
     max_appearance_rate REAL,
-    max_appearance_nrow INTEGER
+    max_appearance_nrow INTEGER,
+    preclude_highfreq_kmer BOOLEAN,
+    seq_index_name TEXT
 )
 SQL
     
@@ -572,8 +725,8 @@ SQL
     $sth->execute();
     $sth->finish();
     
-    $sth = $dbh->prepare("INSERT INTO kafsss_meta (ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-    $sth->execute($VERSION, $minlen, $minsplitlen, $ovllen, 0, 0, '{}', undef, undef, undef, undef);
+    $sth = $dbh->prepare("INSERT INTO kafsss_meta (ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow, preclude_highfreq_kmer, seq_index_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $sth->execute($VERSION, $minlen, $minsplitlen, $ovllen, 0, 0, '{}', undef, undef, undef, undef, undef, undef);
     $sth->finish();
     
     # Create main table (simple structure - hash functions handle efficiency)
@@ -1091,79 +1244,95 @@ sub ensure_table_exists {
 
 sub update_meta_statistics {
     my ($dbh) = @_;
-    
-    print "Calculating total sequence statistics...\n";
-    
+
+    print "Attempting to update statistics...\n";
+
+    # Try to acquire ACCESS EXCLUSIVE lock on kafsss_data table with NOWAIT
+    # This ensures only the last process (when no other process is accessing the table)
+    # will successfully update statistics
+    eval {
+        $dbh->begin_work;
+        $dbh->do("LOCK TABLE kafsss_data IN ACCESS EXCLUSIVE MODE NOWAIT");
+    };
+    if ($@) {
+        # Lock acquisition failed - another process is still accessing the table
+        print "Could not acquire exclusive lock on kafsss_data (other processes still running).\n";
+        print "Statistics update will be handled by the last finishing process.\n";
+        eval { $dbh->rollback; };
+        return;
+    }
+
+    print "Exclusive lock acquired. Calculating total sequence statistics...\n";
+
     # Calculate total number of sequences and total bases using accurate nuc_length() function
     my $sth = $dbh->prepare(<<SQL);
-SELECT 
+SELECT
     COUNT(*) as nseq,
     SUM(nuc_length(seq)) as total_nchar
 FROM kafsss_data
 SQL
-    
+
     $sth->execute();
     my ($nseq, $nchar) = $sth->fetchrow_array();
     $sth->finish();
-    
+
     print "Total sequences: $nseq, Total bases: $nchar\n";
-    
+
     # Calculate subset-specific statistics with single query
     print "Calculating subset-specific statistics...\n";
-    
+
     $sth = $dbh->prepare(<<SQL);
-SELECT 
-    subset_name, 
-    COUNT(*) AS nseq, 
-    SUM(nuc_length(seq)) AS total_nchar 
+SELECT
+    subset_name,
+    COUNT(*) AS nseq,
+    SUM(nuc_length(seq)) AS total_nchar
 FROM (
-    SELECT unnest(subset) AS subset_name, seq 
-    FROM kafsss_data 
+    SELECT unnest(subset) AS subset_name, seq
+    FROM kafsss_data
     WHERE subset IS NOT NULL AND array_length(subset, 1) > 0
-) AS unnested_subsets 
+) AS unnested_subsets
 GROUP BY subset_name
 SQL
-    
+
     $sth->execute();
     my %subset_stats = ();
-    
+
     while (my ($subset, $subset_nseq, $subset_nchar) = $sth->fetchrow_array()) {
         $subset_stats{$subset} = {
             nseq => $subset_nseq,
             nchar => $subset_nchar
         };
-        
+
         print "  Subset '$subset': $subset_nseq sequences, $subset_nchar bases\n";
     }
     $sth->finish();
-    
+
     # Prepare subset statistics JSON
     my $subset_json = encode_json(\%subset_stats);
-    
+
     # Update kafsss_meta table
     print "Updating kafsss_meta table with statistics...\n";
-    
+
     $sth = $dbh->prepare(<<SQL);
-UPDATE kafsss_meta 
+UPDATE kafsss_meta
 SET nseq = ?, nchar = ?, subset = ?
 SQL
-    
+
     eval {
-        $dbh->begin_work;
         $sth->execute($nseq, $nchar, $subset_json);
         $dbh->commit;
         print "Transaction committed successfully for statistics update.\n";
     };
-    
+
     if ($@) {
         print STDERR "Error updating kafsss_meta statistics: $@\n";
         eval { $dbh->rollback; };
         $sth->finish();
         die "Statistics update failed: $@\n";
     }
-    
+
     $sth->finish();
-    
+
     print "Statistics update completed.\n";
 }
 
