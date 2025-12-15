@@ -14,6 +14,8 @@ use Time::HiRes qw(time);
 use Fcntl qw(:flock);
 use IO::Compress::Gzip qw(gzip $GzipError);
 use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
+use IO::Compress::Zstd qw(zstd $ZstdError);
+use IO::Uncompress::UnZstd qw(unzstd $UnZstdError);
 
 # Version number
 my $VERSION = "__VERSION__";
@@ -808,8 +810,9 @@ sub send_error_response {
 sub send_success_response {
     my ($self, $data, $cgi) = @_;
 
-    # Check if client accepts gzip encoding
+    # Check if client accepts compression (zstd preferred over gzip)
     my $accept_encoding = $cgi ? ($cgi->http('Accept-Encoding') || '') : '';
+    my $use_zstd = ($accept_encoding =~ /zstd/i);
     my $use_gzip = ($accept_encoding =~ /gzip/i);
 
     # Add success field to response
@@ -827,8 +830,21 @@ sub send_success_response {
     print "X-Job-Queue-Size: $current_jobs\r\n";
     print "X-Job-Queue-Limit: " . $self->{max_jobs} . "\r\n";
 
-    if ($use_gzip && length($json_body) > 100) {
-        # Compress response body
+    if ($use_zstd && length($json_body) > 100) {
+        # Compress response body with zstd
+        my $compressed;
+        if (zstd(\$json_body => \$compressed)) {
+            print "Content-Encoding: zstd\r\n";
+            print "\r\n";
+            binmode STDOUT;
+            print $compressed;
+        } else {
+            # Fallback to uncompressed on error
+            print "\r\n";
+            print $json_body;
+        }
+    } elsif ($use_gzip && length($json_body) > 100) {
+        # Compress response body with gzip
         my $compressed;
         if (gzip(\$json_body => \$compressed)) {
             print "Content-Encoding: gzip\r\n";
@@ -871,9 +887,12 @@ sub parse_json_request {
         die "No JSON data received";
     }
 
-    # Decompress if gzip-encoded
+    # Decompress if compressed
     my $json_text;
-    if ($content_encoding =~ /gzip/i) {
+    if ($content_encoding =~ /zstd/i) {
+        IO::Uncompress::UnZstd::unzstd(\$raw_content => \$json_text)
+            or die "Failed to decompress zstd request: $IO::Uncompress::UnZstd::UnZstdError";
+    } elsif ($content_encoding =~ /gzip/i) {
         IO::Uncompress::Gunzip::gunzip(\$raw_content => \$json_text)
             or die "Failed to decompress gzip request: $IO::Uncompress::Gunzip::GunzipError";
     } else {
@@ -1204,6 +1223,7 @@ sub handle_metadata_request {
             available_subsets => \@available_subsets,
             available_indices => \@available_indices,
             accept_gzip_request => JSON::true,
+            accept_zstd_request => JSON::true,
             supported_endpoints => ["/search", "/result", "/status", "/cancel", "/metadata"]
         };
 

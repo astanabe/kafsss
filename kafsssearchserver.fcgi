@@ -14,6 +14,7 @@ use MIME::Base64;
 use Time::HiRes qw(time);
 use Fcntl qw(:flock);
 use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
+use IO::Uncompress::UnZstd qw(unzstd $UnZstdError);
 
 # Version number
 my $VERSION = "__VERSION__";
@@ -631,6 +632,7 @@ sub handle_metadata_request {
             available_subsets => \@available_subsets,
             available_indices => \@available_indices,
             accept_gzip_request => JSON::true,
+            accept_zstd_request => JSON::true,
             supported_endpoints => ["/search", "/result", "/status", "/cancel", "/metadata"]
         };
 
@@ -1145,9 +1147,12 @@ sub parse_json_request {
         die "No JSON data received";
     }
 
-    # Decompress if gzip-encoded
+    # Decompress if compressed
     my $json_text;
-    if ($content_encoding =~ /gzip/i) {
+    if ($content_encoding =~ /zstd/i) {
+        unzstd(\$raw_content => \$json_text)
+            or die "Failed to decompress zstd request: $UnZstdError";
+    } elsif ($content_encoding =~ /gzip/i) {
         gunzip(\$raw_content => \$json_text)
             or die "Failed to decompress gzip request: $GunzipError";
     } else {

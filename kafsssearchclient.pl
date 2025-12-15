@@ -12,6 +12,9 @@ use File::Basename;
 use URI;
 use File::Temp qw(tempfile);
 use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
+use IO::Compress::Gzip qw(gzip $GzipError);
+use IO::Uncompress::UnZstd qw(unzstd $UnZstdError);
+use IO::Compress::Zstd qw(zstd $ZstdError);
 
 # Version number
 my $VERSION = "__VERSION__";
@@ -25,7 +28,7 @@ sub create_ua {
         timeout => $timeout,
         agent => "kafsssearchclient/$VERSION"
     );
-    $ua->default_header('Accept-Encoding' => 'gzip');
+    $ua->default_header('Accept-Encoding' => 'zstd, gzip');
 
     return $ua;
 }
@@ -36,7 +39,13 @@ sub decompress_response_body {
     my $content = $response->content;
     my $encoding = $response->header('Content-Encoding') || '';
 
-    if ($encoding eq 'gzip') {
+    if ($encoding eq 'zstd') {
+        my $decompressed;
+        unless (unzstd(\$content => \$decompressed)) {
+            die "Failed to decompress zstd response: $UnZstdError\n";
+        }
+        return $decompressed;
+    } elsif ($encoding eq 'gzip') {
         my $decompressed;
         unless (gunzip(\$content => \$decompressed)) {
             die "Failed to decompress gzip response: $GunzipError\n";
@@ -317,9 +326,11 @@ for my $i (0..$#server_urls) {
 print "\n";
 
 # Validate server metadata (get metadata from first available server)
-my $server_metadata = validate_server_metadata(@server_urls);
+our $server_metadata = validate_server_metadata(@server_urls);
 print "Server database: " . ($server_metadata->{database} || 'default') . "\n";
 print "Server k-mer size: " . $server_metadata->{kmer_size} . "\n";
+print "Server accepts zstd: " . ($server_metadata->{accept_zstd_request} ? 'yes' : 'no') . "\n";
+print "Server accepts gzip: " . ($server_metadata->{accept_gzip_request} ? 'yes' : 'no') . "\n";
 
 # Use server database if none specified
 if (!$database && $server_metadata->{database}) {
@@ -681,10 +692,32 @@ sub make_job_submission_request {
     
     my $json = JSON->new;
     my $json_data = $json->encode($job_data);
-    
-    my $request = POST $submit_url,
-        'Content-Type' => 'application/json',
-        Content => $json_data;
+
+    # Compress request body based on server capability (zstd > gzip > none)
+    my $request;
+    if ($server_metadata->{accept_zstd_request}) {
+        my $compressed_data;
+        unless (zstd(\$json_data => \$compressed_data)) {
+            die "Failed to compress request data with zstd: $ZstdError\n";
+        }
+        $request = POST $submit_url,
+            'Content-Type' => 'application/json',
+            'Content-Encoding' => 'zstd',
+            Content => $compressed_data;
+    } elsif ($server_metadata->{accept_gzip_request}) {
+        my $compressed_data;
+        unless (gzip(\$json_data => \$compressed_data)) {
+            die "Failed to compress request data with gzip: $GzipError\n";
+        }
+        $request = POST $submit_url,
+            'Content-Type' => 'application/json',
+            'Content-Encoding' => 'gzip',
+            Content => $compressed_data;
+    } else {
+        $request = POST $submit_url,
+            'Content-Type' => 'application/json',
+            Content => $json_data;
+    }
     
     # Add authentication if available
     add_auth_credentials($request, $submit_url);
@@ -844,38 +877,45 @@ sub write_results_to_file {
 
 sub validate_server_metadata {
     my (@server_urls) = @_;
-    
+
     for my $server_url (@server_urls) {
         my $ua = LWP::UserAgent->new(
             timeout => 10,
             agent => "kafsssearchclient/$VERSION"
         );
-        
+
         # Try to get server metadata
         my $request = HTTP::Request->new(GET => $server_url);
         add_auth_credentials($request, $server_url);
-        
+
         my $response = $ua->request($request);
-        
+
         if ($response->is_success) {
             my $content = $response->content;
-            
+
             # Parse JSON response for metadata
             if ($content =~ /"database"\s*:\s*"([^"]+)"/) {
                 my $server_db = $1;
                 if ($content =~ /"kmer_size"\s*:\s*(\d+)/) {
                     my $kmer_size = $1;
+
+                    # Check compression support
+                    my $accept_zstd = ($content =~ /"accept_zstd_request"\s*:\s*true/) ? 1 : 0;
+                    my $accept_gzip = ($content =~ /"accept_gzip_request"\s*:\s*true/) ? 1 : 0;
+
                     return {
                         database => $server_db,
-                        kmer_size => $kmer_size
+                        kmer_size => $kmer_size,
+                        accept_zstd_request => $accept_zstd,
+                        accept_gzip_request => $accept_gzip
                     };
                 }
             }
         }
     }
-    
+
     # Fallback: try with minimal request
-    return { database => undef, kmer_size => 'unknown' };
+    return { database => undef, kmer_size => 'unknown', accept_zstd_request => 0, accept_gzip_request => 0 };
 }
 
 # Job persistence functions
