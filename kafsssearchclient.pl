@@ -88,6 +88,7 @@ my $failedserverexclusion = $default_failedserverexclusion;
 my $mode = $default_mode;
 my $outfmt = $default_outfmt;
 my $seqid_db = '';
+my $tmpdir = $ENV{TMPDIR} || '/tmp';
 my $netrc_file = '';
 my $http_user = '';
 my $http_password = '';
@@ -114,6 +115,7 @@ GetOptions(
     'mode=s' => \$mode,
     'outfmt=s' => \$outfmt,
     'seqid_db=s' => \$seqid_db,
+    'tmpdir=s' => \$tmpdir,
     'netrc-file=s' => \$netrc_file,
     'http-user=s' => \$http_user,
     'http-password=s' => \$http_password,
@@ -187,6 +189,7 @@ unless ($resume_job_id || $cancel_job_id || $show_jobs) {
     die "minscore must be positive integer\n" if defined $minscore && $minscore <= 0;
     die "minpsharedkmer must be between 0.0 and 1.0\n" unless $minpsharedkmer >= 0.0 && $minpsharedkmer <= 1.0;
     die "numthreads must be positive integer\n" unless $numthreads > 0;
+    die "tmpdir '$tmpdir' does not exist or is not a directory\n" unless -d $tmpdir;
     die "maxnretry must be non-negative integer\n" unless $maxnretry >= 0;
     die "maxnretry_total must be non-negative integer\n" unless $maxnretry_total >= 0;
     die "retrydelay must be non-negative integer\n" unless $retrydelay >= 0;
@@ -347,17 +350,28 @@ my $total_retry_count = 0;
 my $output_handles = {};
 my $output_fh = undef;
 
-if ($outfmt eq 'TSV') {
-    # Single TSV file - redirect STDOUT
+# Get base format for comparison (strip compression suffix)
+my $base_outfmt = get_base_format($outfmt);
+my $compression_type = get_compression_type($outfmt);
+
+if ($base_outfmt eq 'TSV') {
+    # Single TSV file (possibly compressed)
     if ($global_output_file && $global_output_file ne '-' && $global_output_file ne 'stdout' && $global_output_file ne 'STDOUT') {
-        open STDOUT, '>', $global_output_file or die "Cannot open output file '$global_output_file': $!\n";
+        if ($compression_type) {
+            # Compressed output - use pipe to compression tool
+            $output_fh = open_compressed_output_file($global_output_file, $compression_type);
+            $output_handles->{tsv_fh} = $output_fh;
+            $output_handles->{compression_type} = $compression_type;
+        } else {
+            open STDOUT, '>', $global_output_file or die "Cannot open output file '$global_output_file': $!\n";
+        }
     }
-} elsif ($outfmt eq 'multiTSV' || $outfmt eq 'FASTA' || $outfmt eq 'multiFASTA') {
+} elsif ($base_outfmt eq 'multiTSV' || $base_outfmt eq 'FASTA' || $base_outfmt eq 'multiFASTA') {
     # Multiple files - handles will be created per query
     $output_handles->{prefix} = $global_output_file;
     $output_handles->{format} = $outfmt;
     $output_handles->{mode} = $mode;
-} elsif ($outfmt eq 'BLASTDB') {
+} elsif ($base_outfmt eq 'BLASTDB') {
     # BLAST database output - uses multiTSV or multiFASTA internally
     $output_handles->{prefix} = $global_output_file;
     $output_handles->{format} = 'BLASTDB';
@@ -370,10 +384,9 @@ if ($outfmt eq 'TSV') {
 print STDERR "Starting parallel processing with $numthreads threads...\n" if $verbose;
 my $result = process_sequences_parallel_streaming(@global_input_files, $output_handles);
 
-# Post-processing for BLASTDB format
+# Post-processing for BLASTDB format (BLASTDB is created directly by child processes)
 if ($outfmt eq 'BLASTDB' && $output_handles->{query_numbers} && @{$output_handles->{query_numbers}} > 0) {
-    print STDERR "Creating BLAST databases...\n";
-    create_blastdb_files($output_handles);
+    print STDERR "BLASTDB creation completed for " . scalar(@{$output_handles->{query_numbers}}) . " queries.\n";
 }
 
 print STDERR "Processing completed successfully.\n";
@@ -386,22 +399,89 @@ exit 0;
 # Async Job Management Functions
 #
 
+# Helper: Handle completed child process and store result info
+sub handle_completed_child {
+    my ($pid, $active_children_ref, $completed_results_ref) = @_;
+
+    return unless exists $active_children_ref->{$pid};
+
+    my $child_info = delete $active_children_ref->{$pid};
+    my $query_number = $child_info->{query_number};
+    my $temp_file = $child_info->{temp_file};
+
+    if ($? != 0) {
+        die "Child process $pid (query $query_number) failed with exit code " . ($? >> 8) . "\n";
+    }
+
+    # Store temp file path only - count will be done during output
+    $completed_results_ref->{$query_number} = { file => $temp_file };
+    print "Completed query $query_number\n";
+}
+
+# Helper: Output one query result and return count
+sub output_query_result {
+    my ($result_info, $query_number, $output_handles) = @_;
+    my $result_count = 0;
+
+    return 0 unless $result_info->{file} && -f $result_info->{file};
+
+    if ($output_handles && $output_handles->{format}) {
+        # Multi-file output - read and write to separate files
+        $result_count = process_temp_file_for_multifile($result_info->{file}, $query_number, $output_handles);
+    } elsif ($output_handles && $output_handles->{compression_type}) {
+        # Compressed TSV output - binary concatenate (gzip streams are concatenatable)
+        my $out_fh = $output_handles->{tsv_fh};
+        concatenate_binary_file($result_info->{file}, $out_fh);
+        # Read count from meta file if exists
+        my $count_file = $result_info->{file} . '.count';
+        if (-f $count_file) {
+            open my $cfh, '<', $count_file;
+            $result_count = <$cfh> + 0;
+            close $cfh;
+            unlink $count_file;
+        }
+    } elsif ($output_handles && $output_handles->{tsv_fh}) {
+        # Non-compressed file output via handle
+        my $out_fh = $output_handles->{tsv_fh};
+        open my $temp_fh, '<', $result_info->{file} or die "Cannot open temporary file '$result_info->{file}': $!\n";
+        while (my $line = <$temp_fh>) {
+            chomp $line;
+            print $out_fh "$line\n";
+            $result_count++;
+        }
+        close $temp_fh;
+    } else {
+        # Single file output - stream directly to STDOUT
+        open my $temp_fh, '<', $result_info->{file} or die "Cannot open temporary file '$result_info->{file}': $!\n";
+        while (my $line = <$temp_fh>) {
+            chomp $line;
+            print "$line\n";
+            $result_count++;
+        }
+        close $temp_fh;
+    }
+    unlink $result_info->{file};
+
+    print "Output query $query_number ($result_count results)\n" if $result_count > 0;
+    return $result_count;
+}
+
 sub process_sequences_parallel_streaming {
     my (@input_files, $output_handles) = @_;
-    
+
     my %active_children = ();  # pid => {query_number, temp_file}
-    my %completed_results = (); # query_number => {file, count}
+    my %completed_results = (); # query_number => {file => path}
     my $query_count = 0;
     my $next_output_query = 1;
     my $total_results = 0;
     my $current_file_index = 0;
     my $current_fh = undef;
-    
+
     # Open first input file
     if (@input_files > 0) {
         $current_fh = open_input_file($input_files[$current_file_index]);
     }
-    
+
     while (1) {
         # Read next FASTA entry if we have available slots
         my $fasta_entry = undef;
@@ -409,12 +489,12 @@ sub process_sequences_parallel_streaming {
             # Try to read from current file
             while (!$fasta_entry && $current_fh) {
                 $fasta_entry = read_next_fasta_entry($current_fh);
-                
+
                 # If no more entries in current file, move to next file
                 if (!$fasta_entry) {
                     close_input_file($current_fh, $input_files[$current_file_index]);
                     $current_file_index++;
-                    
+
                     if ($current_file_index < @input_files) {
                         $current_fh = open_input_file($input_files[$current_file_index]);
                     } else {
@@ -424,16 +504,25 @@ sub process_sequences_parallel_streaming {
                 }
             }
         }
-        
+
         # Fork new process if we have a sequence and available slots
         if ($fasta_entry && scalar(keys %active_children) < $numthreads) {
             $query_count++;
             my $global_query_number = $query_count;
-            my ($temp_fh, $temp_file) = tempfile("kafsssearchclient_$$" . "_$global_query_number" . "_XXXXXX", UNLINK => 0);
-            close($temp_fh);
-            
+            my $base_format = get_base_format($outfmt);
+            my $temp_file;
+            if ($base_format eq 'BLASTDB') {
+                # BLASTDB: No temp file needed, just need a path for count file
+                $temp_file = "$tmpdir/kafsssearchclient_$$" . "_$global_query_number";
+            } else {
+                # Other formats: Create actual temp file in tmpdir
+                my ($temp_fh, $tf) = tempfile("kafsssearchclient_$$" . "_$global_query_number" . "_XXXXXX", DIR => $tmpdir, UNLINK => 0);
+                close($temp_fh);
+                $temp_file = $tf;
+            }
+
             my $pid = fork();
-            
+
             if (!defined $pid) {
                 die "Cannot fork: $!\n";
             } elsif ($pid == 0) {
@@ -449,149 +538,48 @@ sub process_sequences_parallel_streaming {
                 print "Started query $query_count: " . $fasta_entry->{label} . "\n";
             }
         }
-        
+
         # Check for completed children (non-blocking)
         my $pid = waitpid(-1, WNOHANG);
-        if ($pid > 0 && exists $active_children{$pid}) {
-            my $child_info = delete $active_children{$pid};
-            my $query_number = $child_info->{query_number};
-            my $temp_file = $child_info->{temp_file};
-            
-            if ($? != 0) {
-                die "Child process $pid (query $query_number) failed with exit code " . ($? >> 8) . "\n";
-            }
-            
-            # Count results and store temp file info for memory-efficient processing
-            my $result_count = 0;
-            if (-f $temp_file) {
-                open my $temp_fh, '<', $temp_file or die "Cannot open temporary file '$temp_file': $!\n";
-                while (<$temp_fh>) {
-                    $result_count++;
-                }
-                close $temp_fh;
-                
-                # Store temp file path and count instead of loading all data into memory
-                $completed_results{$query_number} = {
-                    file => $temp_file,
-                    count => $result_count
-                };
-            } else {
-                $completed_results{$query_number} = {
-                    file => undef,
-                    count => 0
-                };
-            }
-            
-            if ($result_count > 0) {
-                print "Completed query $query_number ($result_count results)\n";
-            } else {
-                print "Completed query $query_number (0 results)\n";
-            }
-        }
-        
+        handle_completed_child($pid, \%active_children, \%completed_results) if $pid > 0;
+
         # Output completed results in order
         while (exists $completed_results{$next_output_query}) {
             my $result_info = delete $completed_results{$next_output_query};
-            
-            if ($result_info->{file} && -f $result_info->{file}) {
-                if ($output_handles && $output_handles->{format}) {
-                    # Multi-file output - read and write to separate files
-                    process_temp_file_for_multifile($result_info->{file}, $next_output_query, $output_handles);
-                    $total_results += $result_info->{count};
-                    unlink $result_info->{file};
-                } else {
-                    # Single file output - stream directly
-                    open my $temp_fh, '<', $result_info->{file} or die "Cannot open temporary file '$result_info->{file}': $!\n";
-                    while (my $line = <$temp_fh>) {
-                        chomp $line;
-                        print "$line\n";
-                        $total_results++;
-                    }
-                    close $temp_fh;
-                    unlink $result_info->{file};
-                }
-            }
+            $total_results += output_query_result($result_info, $next_output_query, $output_handles);
             $next_output_query++;
         }
-        
+
         # Exit condition: no more input and no active children
         if (!$fasta_entry && scalar(keys %active_children) == 0) {
             last;
         }
-        
+
         # If we have active children but no available slots, wait for at least one to complete
         if (scalar(keys %active_children) >= $numthreads) {
             my $pid = waitpid(-1, 0);  # Blocking wait
-            if ($pid > 0 && exists $active_children{$pid}) {
-                my $child_info = delete $active_children{$pid};
-                my $query_number = $child_info->{query_number};
-                my $temp_file = $child_info->{temp_file};
-                
-                if ($? != 0) {
-                    die "Child process $pid (query $query_number) failed with exit code " . ($? >> 8) . "\n";
-                }
-                
-                # Count results and store temp file info for memory-efficient processing
-                my $result_count = 0;
-                if (-f $temp_file) {
-                    open my $temp_fh, '<', $temp_file or die "Cannot open temporary file '$temp_file': $!\n";
-                    while (<$temp_fh>) {
-                        $result_count++;
-                    }
-                    close $temp_fh;
-                    
-                    # Store temp file path and count instead of loading all data into memory
-                    $completed_results{$query_number} = {
-                        file => $temp_file,
-                        count => $result_count
-                    };
-                } else {
-                    $completed_results{$query_number} = {
-                        file => undef,
-                        count => 0
-                    };
-                }
-                
-                if ($result_count > 0) {
-                    print "Completed query $query_number ($result_count results)\n";
-                } else {
-                    print "Completed query $query_number (0 results)\n";
-                }
-            }
+            handle_completed_child($pid, \%active_children, \%completed_results) if $pid > 0;
         }
     }
-    
+
     # Final processing of any remaining completed results
     while (exists $completed_results{$next_output_query}) {
         my $result_info = delete $completed_results{$next_output_query};
-        
-        if ($result_info->{file} && -f $result_info->{file}) {
-            if ($output_handles && $output_handles->{format}) {
-                # Multi-file output - read and write to separate files
-                process_temp_file_for_multifile($result_info->{file}, $next_output_query, $output_handles);
-                $total_results += $result_info->{count};
-                unlink $result_info->{file};
-            } else {
-                # Single file output - stream directly
-                open my $temp_fh, '<', $result_info->{file} or die "Cannot open temporary file '$result_info->{file}': $!\n";
-                while (my $line = <$temp_fh>) {
-                    chomp $line;
-                    print "$line\n";
-                    $total_results++;
-                }
-                close $temp_fh;
-                unlink $result_info->{file};
-            }
-        }
+        $total_results += output_query_result($result_info, $next_output_query, $output_handles);
         $next_output_query++;
     }
-    
+
+    # Close compressed TSV file handle if open
+    if ($output_handles && $output_handles->{tsv_fh}) {
+        close $output_handles->{tsv_fh};
+    }
+
     return { results => $total_results, queries => $query_count };
 }
 
 sub process_single_sequence_client {
     my ($fasta_entry, $query_number, $temp_file, $output_handles) = @_;
-    
+
     # Create job data for single sequence
     my $job_data = {
         sequences => [{
@@ -604,33 +592,154 @@ sub process_single_sequence_client {
         maxnseq => $maxnseq,
         mode => $mode
     };
-    
+
     # Add minscore if specified
     $job_data->{minscore} = $minscore if defined $minscore;
-    
+
     # Add minpsharedkmer
     $job_data->{minpsharedkmer} = $minpsharedkmer;
-    
+
     # Submit job to server
     my $server_url = get_next_server_url();
     my $job_id = make_job_submission_request($server_url, $job_data);
-    
+
     # Poll for results
     my $results = poll_for_results($job_id, $server_url);
-    
-    # Write results to temp file
-    open my $temp_fh, '>', $temp_file or die "Cannot open temporary file '$temp_file' for writing: $!\n";
-    if ($output_handles && $output_handles->{format}) {
-        # For multi-file formats, store format info
-        print $temp_fh "#FORMAT:" . $output_handles->{format} . "\n";
-        print $temp_fh "#MODE:" . $output_handles->{mode} . "\n";
+
+    # Determine output format and compression
+    my $base_format = '';
+    my $compression_type = undef;
+    my $output_format = 'TSV';  # Default
+
+    if ($output_handles) {
+        if ($output_handles->{format}) {
+            $base_format = get_base_format($output_handles->{format});
+            $compression_type = get_compression_type($output_handles->{format});
+            $output_format = $base_format;
+        } elsif ($output_handles->{compression_type}) {
+            $compression_type = $output_handles->{compression_type};
+            $output_format = 'TSV';
+        }
     }
+
+    # For BLASTDB, write directly (no temp file content needed)
+    if ($output_format eq 'BLASTDB') {
+        write_blastdb_from_results($results, $query_number, $temp_file, $output_handles);
+        return;
+    }
+
+    # Open temp file for streaming write (with compression if needed)
+    my $temp_fh;
+    if ($compression_type) {
+        my $cmd = get_compression_command($compression_type);
+        open($temp_fh, "| $cmd > '$temp_file'") or die "Cannot open compressed temp file '$temp_file': $!\n";
+    } else {
+        open($temp_fh, '>', $temp_file) or die "Cannot open temporary file '$temp_file' for writing: $!\n";
+    }
+
+    my $result_count = 0;
+
     if ($results && @$results) {
-        for my $result (@$results) {
-            print $temp_fh "$result\n";
+        if ($output_format eq 'multiFASTA' || $output_format eq 'FASTA') {
+            # Convert TSV results to FASTA format
+            my %seq_to_ids = ();
+            for my $result (@$results) {
+                my @fields = split /\t/, $result;
+                # Fields: query_number, label, seqid_str, [score], [seq]
+                my $seqid_str = $fields[2];
+                my $seq = $fields[-1];  # Last field is sequence (in sequence/maximum mode)
+                if ($seq && $seq !~ /^\d/) {  # Make sure it's not score
+                    push @{$seq_to_ids{$seq}}, $seqid_str;
+                    $result_count++;
+                }
+            }
+            # Write FASTA entries
+            for my $sequence (keys %seq_to_ids) {
+                my @seqids = @{$seq_to_ids{$sequence}};
+                my @converted_seqids = map { my $s = $_; $s =~ s/,/\cA/g; $s } @seqids;
+                my $header = join("\cA", @converted_seqids);
+                print $temp_fh ">$header\n$sequence\n";
+            }
+        } else {
+            # TSV format (TSV, multiTSV)
+            for my $result (@$results) {
+                print $temp_fh "$result\n";
+                $result_count++;
+            }
         }
     }
     close $temp_fh;
+
+    # Write result count to meta file (parent needs it for multifile output)
+    if ($compression_type || $output_format =~ /^multi/) {
+        open my $cfh, '>', "$temp_file.count" or die "Cannot write count file: $!\n";
+        print $cfh $result_count;
+        close $cfh;
+    }
+}
+
+# Write BLASTDB directly from results
+sub write_blastdb_from_results {
+    my ($results, $query_number, $temp_file, $output_handles) = @_;
+
+    my $result_count = 0;
+    my $prefix = $output_handles->{prefix};
+    my $db_name = "${prefix}_${query_number}";
+    my $current_mode = $output_handles->{mode} || $mode;
+
+    if ($current_mode eq 'sequence' || $current_mode eq 'maximum') {
+        # Create BLASTDB from sequences via pipe
+        my @cmd = (
+            'makeblastdb',
+            '-dbtype', 'nucl',
+            '-input_type', 'fasta',
+            '-hash_index',
+            '-parse_seqids',
+            '-in', '-',
+            '-out', $db_name,
+            '-title', $db_name
+        );
+
+        open my $pipe, '|-', @cmd or die "Cannot open pipe to makeblastdb: $!\n";
+
+        if ($results && @$results) {
+            for my $result (@$results) {
+                my @fields = split /\t/, $result;
+                my $seqid_str = $fields[2];
+                my $seq = $fields[-1];
+                if ($seq && $seq !~ /^\d/) {
+                    my $first_seqid = (split /,/, $seqid_str)[0];
+                    print $pipe ">$first_seqid\n$seq\n";
+                    $result_count++;
+                }
+            }
+        }
+
+        close $pipe or warn "makeblastdb failed: $!\n";
+    } else {
+        # minimum/matchscore mode - create alias using blastdb_aliastool
+        my $seqid_db = $output_handles->{seqid_db};
+        if ($seqid_db && $results && @$results) {
+            my @seqids = ();
+            for my $result (@$results) {
+                my @fields = split /\t/, $result;
+                my $seqid_str = $fields[2];
+                push @seqids, split /,/, $seqid_str;
+                $result_count++;
+            }
+
+            if (@seqids > 0) {
+                my $seqid_list = join(',', @seqids);
+                system('blastdb_aliastool', '-dbtype', 'nucl', '-db', $seqid_db,
+                       '-seqidlist_filter', $seqid_list, '-out', $db_name, '-title', $db_name);
+            }
+        }
+    }
+
+    # Write result count (no temp file needed for BLASTDB, only count file)
+    open my $cfh, '>', "$temp_file.count" or die "Cannot write count file: $!\n";
+    print $cfh $result_count;
+    close $cfh;
 }
 
 sub submit_search_job {
@@ -1169,6 +1278,7 @@ Other options:
   --mode=MODE       Output mode: minimum, matchscore, sequence, maximum (default: matchscore)
   --outfmt=FORMAT   Output format: TSV, multiTSV, FASTA, multiFASTA, BLASTDB (default: TSV)
   --seqid_db=DB     BLAST database name for BLASTDB output with --mode=minimum
+  --tmpdir=DIR      Directory for temporary files (default: \$TMPDIR or /tmp)
   --maxnretry_total=INT Maximum total retries for all operations (default: 100)
   --retrydelay=INT  Retry delay in seconds (default: 10, currently unused)
   --failedserverexclusion=INT Exclude failed servers for N seconds (default: infinite, -1)
@@ -1763,110 +1873,92 @@ sub open_compressed_output_file {
     return $fh;
 }
 
-sub write_results_to_file_multi {
-    my ($results, $query_number, $output_handles) = @_;
+# Get file extension for output based on format (e.g., 'multiTSV.gz' -> '.tsv.gz')
+sub get_output_extension {
+    my ($format) = @_;
 
-    return unless @$results > 0;
-
-    my $format = $output_handles->{format};
-    my $prefix = $output_handles->{prefix};
-    my $mode = $output_handles->{mode};
-
-    # Get compression info from format
     my $compression_type = get_compression_type($format);
     my $base_format = get_base_format($format);
 
-    if ($base_format eq 'multiTSV') {
-        # Write to individual TSV file (possibly compressed)
-        my $ext = $compression_type ? ".tsv.$compression_type" : ".tsv";
-        my $filename = "${prefix}_${query_number}${ext}";
-        my $fh = open_compressed_output_file($filename, $compression_type);
-        for my $result (@$results) {
-            print $fh "$result\n";
-        }
-        close $fh unless ref($fh) eq 'GLOB' && $fh == \*STDOUT;
-    } elsif ($base_format eq 'FASTA' || $base_format eq 'multiFASTA') {
-        # Write to individual FASTA file (requires --mode=sequence, possibly compressed)
-        my $ext = $compression_type ? ".fasta.$compression_type" : ".fasta";
-        my $filename = "${prefix}_${query_number}${ext}";
-        my $fh = open_compressed_output_file($filename, $compression_type);
+    my %base_extensions = (
+        'TSV' => '.tsv',
+        'multiTSV' => '.tsv',
+        'FASTA' => '.fasta',
+        'multiFASTA' => '.fasta',
+        'BLASTDB' => '',
+    );
 
-        # Parse TSV results and group by sequence
-        my %seq_to_ids = ();
-        for my $result (@$results) {
-            my @fields = split /\t/, $result;
-            my $seqid_str = $fields[2];  # Third column is seqid list
-            my $sequence = $fields[3] if defined $fields[3];  # Fourth column in sequence mode
+    my $ext = $base_extensions{$base_format} || '';
+    if ($compression_type) {
+        $ext .= ".$compression_type";
+    }
+    return $ext;
+}
 
-            if ($sequence) {
-                push @{$seq_to_ids{$sequence}}, $seqid_str;
-            }
-        }
+# Concatenate binary file to destination (for compressed file concatenation)
+sub concatenate_binary_file {
+    my ($src_file, $dst_fh) = @_;
+    open my $src_fh, '<:raw', $src_file or die "Cannot open '$src_file' for binary read: $!\n";
+    binmode $dst_fh;
+    while (read($src_fh, my $buffer, 65536)) {
+        print $dst_fh $buffer;
+    }
+    close $src_fh;
+}
 
-        # Write FASTA entries
-        for my $sequence (keys %seq_to_ids) {
-            my @seqids = @{$seq_to_ids{$sequence}};
-            # Join seqids with SOH (^A) character
-            my $header = join("\cA", @seqids);
-            print $fh ">$header\n";
-            print $fh "$sequence\n";
-        }
-        close $fh unless ref($fh) eq 'GLOB' && $fh == \*STDOUT;
-    } elsif ($base_format eq 'BLASTDB') {
-        # Track query number for post-processing
-        push @{$output_handles->{query_numbers}}, $query_number;
-
-        if ($mode eq 'minimum') {
-            # Extract accessions and create BLASTDB via pipe (no intermediate files)
-            create_blastdb_from_results_minimum($results, $prefix, $query_number, $output_handles->{seqid_db});
-        } elsif ($mode eq 'sequence') {
-            # Create BLASTDB via pipe directly from results (no FASTA file)
-            create_blastdb_from_results_sequence($results, $prefix, $query_number);
-        }
+# Rename temp file to final destination (same filesystem) or copy+delete (cross filesystem)
+sub move_temp_to_final {
+    my ($temp_file, $final_file) = @_;
+    if (!rename($temp_file, $final_file)) {
+        # rename failed, likely cross-filesystem - use copy and delete
+        require File::Copy;
+        File::Copy::move($temp_file, $final_file)
+            or die "Cannot move '$temp_file' to '$final_file': $!\n";
     }
 }
 
 sub process_temp_file_for_multifile {
     my ($temp_file, $query_number, $output_handles) = @_;
 
-    open my $temp_fh, '<', $temp_file or die "Cannot open temporary file '$temp_file': $!\n";
+    my $format = $output_handles->{format};
+    my $base_format = get_base_format($format);
+    my $compression_type = get_compression_type($format);
 
-    my $format = undef;
-    my $mode = undef;
-    my @results = ();
-
-    while (my $line = <$temp_fh>) {
-        chomp $line;
-
-        # Check for format header
-        if ($line =~ /^#FORMAT:(.+)$/) {
-            $format = $1;
-            next;
-        }
-        if ($line =~ /^#MODE:(.+)$/) {
-            $mode = $1;
-            next;
-        }
-
-        # Store result line as-is
-        push @results, $line;
+    # Read count from meta file
+    my $result_count = 0;
+    my $count_file = "$temp_file.count";
+    if (-f $count_file) {
+        open my $cfh, '<', $count_file;
+        $result_count = <$cfh> + 0;
+        close $cfh;
+        unlink $count_file;
     }
-    close $temp_fh;
 
-    # If format info was in temp file, use it; otherwise use from output_handles
-    $format ||= $output_handles->{format};
-    $mode ||= $output_handles->{mode};
-
-    # Write results to appropriate output file
-    if (@results > 0) {
-        write_results_to_file_multi(\@results, $query_number, {
-            format => $format,
-            prefix => $output_handles->{prefix},
-            mode => $mode,
-            query_numbers => $output_handles->{query_numbers},
-            seqid_db => $output_handles->{seqid_db}
-        });
+    # For BLASTDB, child process already created the database directly
+    if ($base_format eq 'BLASTDB') {
+        unlink $temp_file if -f $temp_file;  # Remove marker file
+        return $result_count;
     }
+
+    # Determine final file name based on format
+    my $ext;
+    if ($base_format eq 'multiTSV') {
+        $ext = $compression_type ? ".tsv.$compression_type" : ".tsv";
+    } elsif ($base_format eq 'multiFASTA') {
+        $ext = $compression_type ? ".fasta.$compression_type" : ".fasta";
+    } else {
+        $ext = $compression_type ? ".tsv.$compression_type" : ".tsv";
+    }
+    my $final_file = $output_handles->{prefix} . "_${query_number}${ext}";
+
+    # Rename temp file to final file (temp file is already in final format)
+    if (-f $temp_file && -s $temp_file) {
+        move_temp_to_final($temp_file, $final_file);
+    } elsif (-f $temp_file) {
+        unlink $temp_file;  # Remove empty temp file
+    }
+
+    return $result_count;
 }
 
 sub parse_netrc_file {
@@ -2025,104 +2117,3 @@ sub validate_server_connectivity {
     print "Server connectivity validation completed ($reachable_servers/" . scalar(@servers) . " servers reachable).\n";
 }
 
-sub create_blastdb_files {
-    my ($output_handles) = @_;
-
-    # BLASTDB creation is now done inline via pipe in write_results_to_file
-    # This function is kept for compatibility but does nothing
-    my @query_numbers = @{$output_handles->{query_numbers} || []};
-    if (@query_numbers > 0) {
-        print STDERR "BLASTDB creation completed for " . scalar(@query_numbers) . " queries.\n";
-    }
-}
-
-# Create BLASTDB from results using pipe (mode=sequence)
-# Pipes FASTA data directly to makeblastdb without intermediate file
-sub create_blastdb_from_results_sequence {
-    my ($results, $prefix, $query_number) = @_;
-
-    my $db_name = "${prefix}_${query_number}";
-
-    # Open pipe to makeblastdb
-    my @cmd = (
-        'makeblastdb',
-        '-dbtype', 'nucl',
-        '-input_type', 'fasta',
-        '-hash_index',
-        '-parse_seqids',
-        '-max_file_sz', '4G',
-        '-in', '-',  # Read from stdin
-        '-out', $db_name,
-        '-title', "${prefix}_${query_number}"
-    );
-
-    open my $pipe, '|-', @cmd or die "Cannot open pipe to makeblastdb: $!\n";
-
-    for my $result (@$results) {
-        my @fields = split /\t/, $result;
-        my $seqid_str = $fields[2];  # Third column is seqid list
-        my $sequence = $fields[3] if defined $fields[3];  # Fourth column in sequence mode
-
-        if ($sequence && $seqid_str) {
-            # Use the first seqid as FASTA header (without position suffix)
-            my @seqids = split(/,/, $seqid_str);
-            my $first_seqid = $seqids[0];
-            $first_seqid =~ s/:\d+:\d+$//;  # Remove position suffix
-            print $pipe ">$first_seqid\n";
-            print $pipe "$sequence\n";
-        }
-    }
-
-    close $pipe or die "makeblastdb failed for query $query_number: $!\n";
-}
-
-# Create BLASTDB from results using pipe (mode=minimum)
-# Pipes accession list directly to blastdb_aliastool without intermediate file
-sub create_blastdb_from_results_minimum {
-    my ($results, $prefix, $query_number, $seqid_db) = @_;
-
-    my $bsl_file = "${prefix}_${query_number}.bsl";
-    my $nal_file = "${prefix}_${query_number}";
-
-    # Step 1: Extract unique accession numbers from results
-    my %acc = ();
-    for my $result (@$results) {
-        my @fields = split /\t/, $result;
-        next unless @fields >= 3;
-        my $seqidlist = $fields[2];  # Third column is seqid list
-        foreach my $seqid (split(/,/, $seqidlist)) {
-            $seqid =~ s/:\d+:\d+$//;  # Remove position suffix
-            $acc{$seqid} = 1;
-        }
-    }
-
-    # Step 2: Create BSL file using blastdb_aliastool via pipe
-    my @bsl_cmd = (
-        'blastdb_aliastool',
-        '-seqid_dbtype', 'nucl',
-        '-seqid_db', $seqid_db,
-        '-seqid_file_in', '/dev/stdin',
-        '-seqid_title', "${prefix}_${query_number}",
-        '-seqid_file_out', $bsl_file
-    );
-
-    open my $pipe, '|-', @bsl_cmd or die "Cannot open pipe to blastdb_aliastool: $!\n";
-    for my $accession (sort keys %acc) {
-        print $pipe "$accession\n";
-    }
-    close $pipe or die "blastdb_aliastool (BSL) failed for query $query_number: $!\n";
-
-    # Step 3: Create NAL file using blastdb_aliastool
-    my @nal_cmd = (
-        'blastdb_aliastool',
-        '-dbtype', 'nucl',
-        '-db', $seqid_db,
-        '-seqidlist', $bsl_file,
-        '-out', $nal_file,
-        '-title', "${prefix}_${query_number}"
-    );
-    my $nal_result = system(@nal_cmd);
-    if ($nal_result != 0) {
-        die "blastdb_aliastool (NAL) failed for query $query_number: exit code " . ($nal_result >> 8) . "\n";
-    }
-}
