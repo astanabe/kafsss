@@ -40,6 +40,13 @@ my $seqid_db = '';
 my $verbose = 0;
 my $help = 0;
 
+# GIN index selection options (all optional)
+my $opt_kmersize;
+my $opt_occurbitlen;
+my $opt_maxpappear;
+my $opt_maxnappear;
+my $opt_precludehighfreqkmer;
+
 # Parse command line options
 GetOptions(
     'host=s' => \$host,
@@ -54,6 +61,11 @@ GetOptions(
     'mode=s' => \$mode,
     'outfmt=s' => \$outfmt,
     'seqid_db=s' => \$seqid_db,
+    'kmersize=i' => \$opt_kmersize,
+    'occurbitlen=i' => \$opt_occurbitlen,
+    'maxpappear=f' => \$opt_maxpappear,
+    'maxnappear=i' => \$opt_maxnappear,
+    'precludehighfreqkmer' => \$opt_precludehighfreqkmer,
     'verbose|v' => \$verbose,
     'help|h' => \$help,
 ) or die "Error in command line arguments\n";
@@ -87,6 +99,15 @@ die "maxnseq must be non-negative integer\n" unless $maxnseq >= 0;
 die "minscore must be positive integer\n" if defined $minscore && $minscore <= 0;
 die "minpsharedkmer must be between 0.0 and 1.0\n" unless $minpsharedkmer >= 0.0 && $minpsharedkmer <= 1.0;
 die "numthreads must be positive integer\n" unless $numthreads > 0;
+
+# Validate maxpappear precision (max 3 decimal places)
+if (defined $opt_maxpappear) {
+    my $maxpappear_str = sprintf("%.10f", $opt_maxpappear);
+    if ($maxpappear_str =~ /\.\d{4,}[1-9]/) {
+        die "Error: --maxpappear value '$opt_maxpappear' has more than 3 decimal places.\n" .
+            "Maximum 3 decimal places allowed (e.g., 0.050, 0.125).\n";
+    }
+}
 
 # Validate mode
 my $normalized_mode = normalize_mode($mode);
@@ -215,100 +236,64 @@ validate_database_schema($dbh);
 # Verify database structure
 verify_database_structure($dbh);
 
-# Get all metadata from kafsss_meta table
-my $metadata = get_metadata_from_meta($dbh);
-print "Retrieved metadata - k-mer size: $metadata->{kmer_size}, ovllen: $metadata->{ovllen}\n";
+# Get ovllen from kafsss_meta table
+my $ovllen = get_ovllen_from_meta($dbh);
 
-# Check for matching high-frequency k-mer data
-my $use_highfreq_cache = check_highfreq_kmer_exists($dbh, $metadata);
+# Get available GIN indexes
+my $gin_indexes = get_gin_indexes($dbh);
 
-# Set k-mer size for pg_kmersearch
-print "Setting k-mer size to $metadata->{kmer_size}...\n";
+# Build target parameters from command line options
+my $target_params = {
+    kmer_size => $opt_kmersize,
+    occur_bitlen => $opt_occurbitlen,
+    max_appearance_rate => $opt_maxpappear,
+    max_appearance_nrow => $opt_maxnappear,
+    preclude_highfreq_kmer => $opt_precludehighfreqkmer
+};
+
+# Select appropriate GIN index
+my $selected_index = select_gin_index($dbh, $gin_indexes, $target_params);
+my $index_params = $selected_index->{params};
+
+print "Selected GIN index: $selected_index->{index_name}\n";
+print "Index parameters: kmer_size=$index_params->{kmer_size}, occur_bitlen=$index_params->{occur_bitlen}, " .
+      "max_appearance_rate=$index_params->{max_appearance_rate}, max_appearance_nrow=$index_params->{max_appearance_nrow}, " .
+      "preclude_highfreq_kmer=" . ($index_params->{preclude_highfreq_kmer} ? 'true' : 'false') . "\n";
+
+# Build metadata structure for compatibility with existing code
+my $metadata = {
+    ovllen => $ovllen,
+    kmer_size => $index_params->{kmer_size},
+    occur_bitlen => $index_params->{occur_bitlen},
+    max_appearance_rate => $index_params->{max_appearance_rate},
+    max_appearance_nrow => $index_params->{max_appearance_nrow},
+    use_highfreq_cache => $index_params->{preclude_highfreq_kmer},
+    index_name => $selected_index->{index_name}
+};
+
+# Set all kmersearch GUC variables based on selected index
+print "Setting kmersearch GUC variables based on selected index...\n";
 eval {
     $dbh->do("SET kmersearch.kmer_size = $metadata->{kmer_size}");
-    print "K-mer size set to $metadata->{kmer_size} successfully.\n";
-};
-if ($@) {
-    die "Failed to set k-mer size: $@\n";
-}
+    $dbh->do("SET kmersearch.occur_bitlen = $metadata->{occur_bitlen}");
+    $dbh->do("SET kmersearch.max_appearance_rate = $metadata->{max_appearance_rate}");
+    $dbh->do("SET kmersearch.max_appearance_nrow = $metadata->{max_appearance_nrow}");
 
-# Set additional kmersearch parameters if available
-if (defined $metadata->{occur_bitlen}) {
-    print "Setting occur_bitlen to $metadata->{occur_bitlen}...\n";
-    eval {
-        $dbh->do("SET kmersearch.occur_bitlen = $metadata->{occur_bitlen}");
-        print "Occur_bitlen set to $metadata->{occur_bitlen} successfully.\n";
-    };
-    if ($@) {
-        warn "Warning: Failed to set occur_bitlen: $@\n";
-    }
-}
-
-if (defined $metadata->{max_appearance_rate}) {
-    print "Setting max_appearance_rate to $metadata->{max_appearance_rate}...\n";
-    eval {
-        $dbh->do("SET kmersearch.max_appearance_rate = $metadata->{max_appearance_rate}");
-        print "Max_appearance_rate set to $metadata->{max_appearance_rate} successfully.\n";
-    };
-    if ($@) {
-        warn "Warning: Failed to set max_appearance_rate: $@\n";
-    }
-}
-
-if (defined $metadata->{max_appearance_nrow}) {
-    print "Setting max_appearance_nrow to $metadata->{max_appearance_nrow}...\n";
-    eval {
-        $dbh->do("SET kmersearch.max_appearance_nrow = $metadata->{max_appearance_nrow}");
-        print "Max_appearance_nrow set to $metadata->{max_appearance_nrow} successfully.\n";
-    };
-    if ($@) {
-        warn "Warning: Failed to set max_appearance_nrow: $@\n";
-    }
-}
-
-# Set high-frequency k-mer exclusion parameters
-if ($use_highfreq_cache) {
-    print "Enabling high-frequency k-mer exclusion...\n";
-    eval {
+    if ($metadata->{use_highfreq_cache}) {
         $dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
         $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
-        print "High-frequency k-mer exclusion enabled.\n";
-    };
-    if ($@) {
-        warn "Warning: Failed to enable high-frequency k-mer exclusion: $@\n";
-    }
-} else {
-    print "Disabling high-frequency k-mer exclusion (no matching data)...\n";
-    eval {
+    } else {
         $dbh->do("SET kmersearch.preclude_highfreq_kmer = false");
         $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
-        print "High-frequency k-mer exclusion disabled.\n";
-    };
-    if ($@) {
-        warn "Warning: Failed to disable high-frequency k-mer exclusion: $@\n";
     }
-}
 
-# Set minimum score if specified
-if (defined $minscore) {
-    print "Setting minimum score to $minscore...\n";
-    eval {
-        $dbh->do("SET kmersearch.min_score = $minscore");
-        print "Minimum score set to $minscore successfully.\n";
-    };
-    if ($@) {
-        die "Failed to set minimum score: $@\n";
-    }
-}
-
-# Set minimum shared k-mer rate
-print "Setting minimum shared k-mer rate to $minpsharedkmer...\n";
-eval {
+    $dbh->do("SET kmersearch.min_score = $minscore");
     $dbh->do("SET kmersearch.min_shared_kmer_rate = $minpsharedkmer");
-    print "Minimum shared k-mer rate set to $minpsharedkmer successfully.\n";
+
+    print "GUC variables set successfully.\n";
 };
 if ($@) {
-    die "Failed to set minimum shared k-mer rate: $@\n";
+    die "Failed to set kmersearch GUC variables: $@\n";
 }
 
 # Parent process disconnects from database after metadata retrieval (child processes will reconnect)
@@ -434,6 +419,14 @@ Other options:
   --mode=MODE       Output mode: minimum, matchscore, sequence, maximum (default: matchscore)
   --outfmt=FORMAT   Output format: TSV, multiTSV, FASTA, multiFASTA, BLASTDB (default: TSV)
   --seqid_db=DB     BLAST database name for BLASTDB output with --mode=minimum
+
+GIN index selection options (for databases with multiple indexes):
+  --kmersize=INT    K-mer size for index selection
+  --occurbitlen=INT Occurrence bit length for index selection
+  --maxpappear=REAL Max appearance rate for index selection (max 3 decimal places)
+  --maxnappear=INT  Max appearance nrow for index selection
+  --precludehighfreqkmer  Select index with preclude_highfreq_kmer=true
+
   --verbose, -v     Show detailed processing messages (default: false)
   --help, -h        Show this help message
 
@@ -512,6 +505,10 @@ Examples:
 
   # BLAST database output with new database creation
   kafsssearch --db=mydb --mode=sequence --outfmt=BLASTDB query.fasta results
+
+  # Multiple GIN indexes - specify parameters to select index
+  kafsssearch --db=mydb --kmersize=8 query.fasta results.tsv
+  kafsssearch --db=mydb --kmersize=8 --precludehighfreqkmer query.fasta results.tsv
 
 EOF
 }
@@ -884,11 +881,11 @@ sub process_sequences_parallel_streaming {
 
 sub process_single_sequence {
     my ($fasta_entry, $query_number, $temp_file, $metadata, $output_handles) = @_;
-    
+
     # Create new database connection for child process
     my $password = $ENV{PGPASSWORD} || '';
     my $child_dsn = "DBI:Pg:dbname=$database;host=$host;port=$port";
-        
+
     my $child_dbh = DBI->connect($child_dsn, $username, $password, {
         AutoCommit => 1,
         PrintError => 0,
@@ -897,80 +894,29 @@ sub process_single_sequence {
         AutoInactiveDestroy => 1,
         pg_enable_utf8 => 1
     }) or die "Cannot connect to database in child process: $DBI::errstr\n";
-    
-    # Set k-mer size for pg_kmersearch (using metadata from parent)
+
+    # Set all kmersearch GUC variables based on metadata from parent
     eval {
         $child_dbh->do("SET kmersearch.kmer_size = $metadata->{kmer_size}");
-    };
-    if ($@) {
-        die "Failed to set k-mer size in child process: $@\n";
-    }
-    
-    # Set additional kmersearch parameters if available (using metadata from parent)
-    if (defined $metadata->{occur_bitlen}) {
-        eval {
-            $child_dbh->do("SET kmersearch.occur_bitlen = $metadata->{occur_bitlen}");
-        };
-        if ($@) {
-            warn "Warning: Failed to set occur_bitlen in child process: $@\n";
-        }
-    }
-    
-    if (defined $metadata->{max_appearance_rate}) {
-        eval {
-            $child_dbh->do("SET kmersearch.max_appearance_rate = $metadata->{max_appearance_rate}");
-        };
-        if ($@) {
-            warn "Warning: Failed to set max_appearance_rate in child process: $@\n";
-        }
-    }
-    
-    if (defined $metadata->{max_appearance_nrow}) {
-        eval {
-            $child_dbh->do("SET kmersearch.max_appearance_nrow = $metadata->{max_appearance_nrow}");
-        };
-        if ($@) {
-            warn "Warning: Failed to set max_appearance_nrow in child process: $@\n";
-        }
-    }
-    
-    # Set high-frequency k-mer exclusion parameters (using metadata from parent)
-    if ($metadata->{use_highfreq_cache}) {
-        eval {
+        $child_dbh->do("SET kmersearch.occur_bitlen = $metadata->{occur_bitlen}");
+        $child_dbh->do("SET kmersearch.max_appearance_rate = $metadata->{max_appearance_rate}");
+        $child_dbh->do("SET kmersearch.max_appearance_nrow = $metadata->{max_appearance_nrow}");
+
+        if ($metadata->{use_highfreq_cache}) {
             $child_dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
             $child_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
-        };
-        if ($@) {
-            warn "Warning: Failed to enable high-frequency k-mer exclusion in child process: $@\n";
-        }
-    } else {
-        eval {
+        } else {
             $child_dbh->do("SET kmersearch.preclude_highfreq_kmer = false");
             $child_dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
-        };
-        if ($@) {
-            warn "Warning: Failed to disable high-frequency k-mer exclusion in child process: $@\n";
         }
-    }
-    
-    # Set minimum score if specified
-    if (defined $minscore) {
-        eval {
-            $child_dbh->do("SET kmersearch.min_score = $minscore");
-        };
-        if ($@) {
-            die "Failed to set minimum score in child process: $@\n";
-        }
-    }
-    
-    # Set minimum shared k-mer rate
-    eval {
+
+        $child_dbh->do("SET kmersearch.min_score = $minscore");
         $child_dbh->do("SET kmersearch.min_shared_kmer_rate = $minpsharedkmer");
     };
     if ($@) {
-        die "Failed to set minimum shared k-mer rate in child process: $@\n";
+        die "Failed to set kmersearch GUC variables in child process: $@\n";
     }
-    
+
     # Search sequence (using metadata from parent, no need to retrieve again)
     my $results = search_sequence_with_validation($fasta_entry, $child_dbh, $query_number, $metadata->{ovllen}, $mode, $metadata->{kmer_size});
     
@@ -1902,4 +1848,133 @@ sub create_blastdb_from_results_minimum {
     if ($nal_result != 0) {
         die "blastdb_aliastool (NAL) failed for query $query_number: exit code " . ($nal_result >> 8) . "\n";
     }
+}
+
+# Get list of GIN indexes on kafsss_data.seq column
+sub get_gin_indexes {
+    my ($dbh) = @_;
+
+    my $sth = $dbh->prepare(<<SQL);
+SELECT indexname
+FROM pg_indexes
+WHERE tablename = 'kafsss_data'
+  AND indexname LIKE 'idx_kafsss_data_seq_gin_km%'
+ORDER BY indexname
+SQL
+    $sth->execute();
+
+    my @indexes = ();
+    while (my ($indexname) = $sth->fetchrow_array()) {
+        push @indexes, $indexname;
+    }
+    $sth->finish();
+
+    return \@indexes;
+}
+
+# Parse GIN index name to extract parameters
+sub parse_gin_index_name {
+    my ($indexname) = @_;
+
+    if ($indexname =~ /idx_kafsss_data_seq_gin_km(\d+)_ob(\d+)_mar(\d{4})_man(\d+)_phk([TF])/) {
+        return {
+            kmer_size => int($1),
+            occur_bitlen => int($2),
+            max_appearance_rate => $3 / 1000,
+            max_appearance_nrow => int($4),
+            preclude_highfreq_kmer => ($5 eq 'T' ? 1 : 0)
+        };
+    }
+
+    return undef;
+}
+
+# Select appropriate GIN index based on target parameters
+sub select_gin_index {
+    my ($dbh, $indexes, $target_params) = @_;
+
+    my $index_count = scalar(@$indexes);
+
+    if ($index_count == 0) {
+        die "Error: No GIN indexes found on kafsss_data.seq column.\n" .
+            "Please create indexes first using: kafssindex --mode=create $database\n";
+    }
+
+    # If only one index exists, use it
+    if ($index_count == 1) {
+        my $parsed = parse_gin_index_name($indexes->[0]);
+        if (!$parsed) {
+            die "Error: Cannot parse GIN index name: $indexes->[0]\n";
+        }
+        return {
+            index_name => $indexes->[0],
+            params => $parsed
+        };
+    }
+
+    # Multiple indexes - filter by target parameters
+    my @matching_indexes = ();
+
+    for my $indexname (@$indexes) {
+        my $parsed = parse_gin_index_name($indexname);
+        next unless $parsed;
+
+        my $matches = 1;
+
+        if (defined $target_params->{kmer_size}) {
+            $matches = 0 if $parsed->{kmer_size} != $target_params->{kmer_size};
+        }
+        if (defined $target_params->{occur_bitlen}) {
+            $matches = 0 if $parsed->{occur_bitlen} != $target_params->{occur_bitlen};
+        }
+        if (defined $target_params->{max_appearance_rate}) {
+            $matches = 0 if abs($parsed->{max_appearance_rate} - $target_params->{max_appearance_rate}) >= 0.0001;
+        }
+        if (defined $target_params->{max_appearance_nrow}) {
+            $matches = 0 if $parsed->{max_appearance_nrow} != $target_params->{max_appearance_nrow};
+        }
+        if (defined $target_params->{preclude_highfreq_kmer}) {
+            $matches = 0 if $parsed->{preclude_highfreq_kmer} != $target_params->{preclude_highfreq_kmer};
+        }
+
+        if ($matches) {
+            push @matching_indexes, {
+                index_name => $indexname,
+                params => $parsed
+            };
+        }
+    }
+
+    my $match_count = scalar(@matching_indexes);
+
+    if ($match_count == 0) {
+        # Build helpful error message listing available indexes
+        my @available = ();
+        for my $indexname (@$indexes) {
+            my $parsed = parse_gin_index_name($indexname);
+            if ($parsed) {
+                push @available, sprintf("  - %s (kmersize=%d, occurbitlen=%d, maxpappear=%.3f, maxnappear=%d, precludehighfreqkmer=%s)",
+                    $indexname,
+                    $parsed->{kmer_size},
+                    $parsed->{occur_bitlen},
+                    $parsed->{max_appearance_rate},
+                    $parsed->{max_appearance_nrow},
+                    $parsed->{preclude_highfreq_kmer} ? 'true' : 'false'
+                );
+            }
+        }
+        die "Error: No matching GIN index found for the specified parameters.\n" .
+            "Available indexes:\n" . join("\n", @available) . "\n" .
+            "Please specify parameters that match one of the available indexes.\n";
+    }
+
+    if ($match_count == 1) {
+        return $matching_indexes[0];
+    }
+
+    # Multiple matches - need more specific parameters
+    my @match_names = map { "  - $_->{index_name}" } @matching_indexes;
+    die "Error: Multiple GIN indexes match the specified parameters.\n" .
+        "Matching indexes:\n" . join("\n", @match_names) . "\n" .
+        "Please specify additional parameters (--kmersize, --occurbitlen, --maxpappear, --maxnappear, --precludehighfreqkmer) to uniquely identify the index.\n";
 }

@@ -6,6 +6,8 @@ A comprehensive toolkit for DNA sequence analysis using k-mer similarity search 
 
 - **Database Management**: Store and index multi-FASTA sequences in PostgreSQL with compression and subsetting
 - **High-Performance Search**: Fast k-mer similarity search with configurable parameters and parallel processing
+- **Multiple GIN Index Support**: Create multiple indexes with different parameters; automatic or manual selection at search time
+- **Multi-Database Support**: Server components can serve multiple databases with configured subsets
 - **Asynchronous Processing**: Job-based search with SQLite job management, automatic polling, and resume capability
 - **Load Balancing**: Multi-server support with failover, retry logic, and round-robin distribution
 - **Multiple Input Formats**: FASTA, compressed files (.gz, .bz2, .xz, .zst), BLAST databases, wildcard patterns

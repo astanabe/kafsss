@@ -586,6 +586,15 @@ kafsssearch [options] input_file output_file
 - `--outfmt=FORMAT` - Output format: TSV (default), multiTSV, FASTA, multiFASTA, BLASTDB. Supports compression suffix (.gz, .bz2, .xz, .zst)
 - `--numthreads=INT` - Number of parallel threads (default: 1)
 
+**GIN Index Selection** (for databases with multiple indexes):
+- `--kmersize=INT` - Select index with matching kmer_size
+- `--occurbitlen=INT` - Select index with matching occur_bitlen
+- `--maxpappear=REAL` - Select index with matching max_appearance_rate (max 3 decimal places)
+- `--maxnappear=INT` - Select index with matching max_appearance_nrow
+- `--precludehighfreqkmer` - Select index with preclude_highfreq_kmer=true
+
+If database has only one GIN index, it is automatically selected. If multiple indexes exist, specify parameters to uniquely identify one.
+
 #### Input/Output Files
 - Input: Multi-FASTA format, use `-`, `stdin`, or `STDIN` for standard input
 - Output: TSV format, use `-`, `stdout`, or `STDOUT` for standard output
@@ -617,6 +626,10 @@ kafsssearch --db=mydb --outfmt=BLASTDB query.fasta results
 
 # Compressed output
 kafsssearch --db=mydb --outfmt=TSV.gz query.fasta results.tsv.gz
+
+# Multiple GIN indexes - specify parameters to select index
+kafsssearch --db=mydb --kmersize=8 query.fasta results.tsv
+kafsssearch --db=mydb --kmersize=8 --precludehighfreqkmer query.fasta results.tsv
 ```
 
 #### Compression Tools
@@ -807,7 +820,27 @@ my $default_maxnseq = 1000;             # Default max results (0=unlimited)
 my $default_minscore = 1;               # Default min score
 my $default_minpsharedkmer = 0.5;       # Default minimum shared k-mer rate
 my $default_numthreads = 5;             # Number of parallel threads
+
+# Database configuration - Multiple databases support
+my @available_databases = ('mykmersearch', 'otherdb');  # Array of available database names
+
+# Subset configuration (format: "database_name:subset_name")
+my @available_subsets = ('mykmersearch:bacteria', 'mykmersearch:archaea');
+
+# Default GIN index parameters (all optional, used for index selection)
+my $default_kmersize = '';           # Default kmer_size value (empty = unspecified)
+my $default_occurbitlen = '';        # Default occur_bitlen value
+my $default_maxpappear = '';         # Default max_appearance_rate (max 3 decimal places)
+my $default_maxnappear = '';         # Default max_appearance_nrow value
+my $default_precludehighfreqkmer = '';  # Default preclude_highfreq_kmer (1, 0, or empty)
 ```
+
+When the server starts, it validates:
+- All databases in `@available_databases` can be connected
+- Required tables (kafsss_data, kafsss_meta) exist in each database
+- At least one GIN index exists in each database
+- All configured subsets in `@available_subsets` exist in their respective databases
+- Default database and GIN index parameters uniquely identify one index
 
 #### API Endpoints
 
@@ -818,12 +851,40 @@ Request JSON:
 {
   "querylabel": "sequence_name",
   "queryseq": "ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG",
-  "db": "database_name",
+  "database": "database_name",
   "subset": "subset_name",
   "maxnseq": 1000,
-  "minscore": 10
+  "minscore": 10,
+  "minpsharedkmer": 0.5,
+  "mode": "matchscore",
+  "kmersize": 8,
+  "occurbitlen": 8,
+  "maxpappear": 0.050,
+  "maxnappear": 0,
+  "precludehighfreqkmer": 1
 }
 ```
+
+Request parameters:
+- `queryseq` (required): Query sequence (only A/C/G/T/U and degenerate codes)
+- `querylabel` (optional): Label for the query (default: "queryseq")
+- `database` or `db` (optional): Database name (default: configured default)
+- `subset` (optional): Subset name for filtering results
+- `maxnseq` (optional): Maximum number of results (default: configured default, 0=unlimited)
+- `minscore` (optional): Minimum score threshold (default: configured default)
+- `minpsharedkmer` (optional): Minimum shared k-mer rate (default: 0.5, range: 0.0-1.0)
+- `mode` (optional): Search mode - `minimum`/`min`, `matchscore`/`score`, `sequence`/`seq`, `maximum`/`max`
+
+**GIN Index Selection** (for databases with multiple indexes):
+- `index` (optional): Full GIN index name (e.g., `idx_kafsss_data_seq_gin_km8_ob8_mar0500_man0_phkT`)
+- OR specify individual parameters to match:
+  - `kmersize`: Match kmer_size value
+  - `occurbitlen`: Match occur_bitlen value
+  - `maxpappear`: Match max_appearance_rate (max 3 decimal places)
+  - `maxnappear`: Match max_appearance_nrow value
+  - `precludehighfreqkmer`: Match preclude_highfreq_kmer (1=true, 0=false)
+
+Note: Cannot specify both `index` and individual parameters. If only one GIN index exists in the database, it is automatically selected.
 
 Response JSON (job submitted):
 ```json
@@ -901,15 +962,28 @@ Response JSON:
 ```json
 {
   "success": true,
+  "server_version": "0.1.2025.12.13",
   "default_database": "mykmersearch",
   "default_subset": "bacteria",
   "default_maxnseq": 1000,
-  "default_minscore": "10",
-  "server_version": "0.1.2025.12.13",
+  "default_minscore": 10,
+  "default_kmersize": 8,
+  "default_occurbitlen": 8,
+  "default_maxpappear": 0.050,
+  "default_maxnappear": 0,
+  "default_precludehighfreqkmer": true,
+  "available_databases": ["mykmersearch", "otherdb"],
+  "available_subsets": ["mykmersearch:bacteria", "mykmersearch:archaea"],
+  "available_indices": [
+    "mykmersearch:idx_kafsss_data_seq_gin_km8_ob8_mar0500_man0_phkT",
+    "otherdb:idx_kafsss_data_seq_gin_km8_ob8_mar0500_man0_phkT"
+  ],
   "accept_gzip_request": true,
   "supported_endpoints": ["/search", "/result", "/status", "/cancel", "/metadata"]
 }
 ```
+
+Note: `default_kmersize`, `default_occurbitlen`, `default_maxpappear`, `default_maxnappear`, `default_precludehighfreqkmer`, and `default_subset` are only included if configured.
 
 #### Examples
 ```bash

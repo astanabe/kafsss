@@ -33,6 +33,23 @@ my $default_minpsharedkmer = 0.5;  # Set default minimum shared k-mer rate here
 my $default_mode = 'sequence';   # Set default mode (minimum, matchscore, sequence, maximum)
 my $default_numthreads = 5;      # Number of FastCGI processes
 
+# Database configuration - Multiple databases support
+my @available_databases = ();    # Array of available database names (e.g., ('mykmersearch', 'otherdb'))
+
+# Subset configuration
+# Format: "database_name:subset_name" (e.g., "mykmersearch:bacteria")
+my @available_subsets = ();      # Array of available subsets
+
+# Default GIN index parameters (all optional, used for index selection)
+my $default_kmersize = '';           # Default kmer_size value (empty = unspecified)
+my $default_occurbitlen = '';        # Default occur_bitlen value
+my $default_maxpappear = '';         # Default max_appearance_rate (max 3 decimal places)
+my $default_maxnappear = '';         # Default max_appearance_nrow value
+my $default_precludehighfreqkmer = '';  # Default preclude_highfreq_kmer (1, 0, or empty)
+
+# Available indices - populated at startup
+my @available_indices = ();
+
 # SQLite job management settings
 my $default_sqlite_path = './kafsssearchserver.sqlite';  # SQLite database path
 my $default_clean_limit = 86400;      # 24 hours (result retention period in seconds)
@@ -82,6 +99,22 @@ my $proc_manager = FCGI::ProcManager->new({
 });
 
 $proc_manager->pm_manage();
+
+# Validate maxpappear precision at startup
+if ($default_maxpappear ne '') {
+    my $error = validate_maxpappear_precision($default_maxpappear, "Default");
+    if ($error) {
+        die "Error: $error\n";
+    }
+}
+
+# Validate all configured databases and collect available indices
+print STDERR "Validating database configurations...\n";
+my $indices_ref = validate_all_databases($host, $port, $username, $default_password);
+@available_indices = @$indices_ref;
+
+# Validate default database configuration
+validate_default_database($host, $port, $username, $default_password);
 
 # Initialize SQLite database
 print STDERR "Initializing SQLite database...\n";
@@ -256,23 +289,18 @@ sub handle_request {
         handle_cancel_request($cgi);
     } elsif ($path eq '/metadata' && $method eq 'GET') {
         handle_metadata_request($cgi);
-    } elsif ($path eq '/search' && $method eq 'GET') {
-        # Return 405 Method Not Allowed for GET on /search
-        print "Status: 405 Method Not Allowed\r\n";
-        print "Allow: POST\r\n";
-        print "Content-Type: application/json\r\n\r\n";
-        print encode_json({
-            error => "Method Not Allowed",
-            message => "GET method is not allowed for /search endpoint. Use POST method."
-        });
+    } elsif ($path eq '/' && $method eq 'GET') {
+        # Redirect GET / to /metadata
+        handle_metadata_request($cgi);
     } elsif ($method eq 'GET') {
         # Return 405 Method Not Allowed for all other GET requests
         print "Status: 405 Method Not Allowed\r\n";
         print "Allow: POST\r\n";
         print "Content-Type: application/json\r\n\r\n";
         print encode_json({
-            error => "Method Not Allowed",
-            message => "GET method is not allowed. Use POST method."
+            error => JSON::true,
+            code => "METHOD_NOT_ALLOWED",
+            message => "GET method is not allowed for this endpoint. Use POST method or GET /metadata."
         });
     } else {
         print "Status: 404 Not Found\r\n";
@@ -287,36 +315,87 @@ sub handle_request {
 
 sub handle_search_async {
     my ($cgi) = @_;
-    
+
     eval {
         # Parse JSON request
         my $request = parse_json_request($cgi);
-        
+
         # Check job queue limit
         my $current_jobs = get_current_job_count();
         if ($current_jobs >= $max_jobs) {
-            send_error_response(503, "QUEUE_FULL", 
+            send_error_response(503, "QUEUE_FULL",
                 "Job queue is full. Maximum concurrent jobs: $max_jobs");
             return;
         }
-        
-        # Validate required fields
-        for my $field (qw(querylabel queryseq)) {
-            if (!$request->{$field}) {
-                send_error_response(400, "INVALID_REQUEST", 
-                    "Missing required field: $field");
+
+        # Validate required fields - queryseq is required, querylabel has default
+        if (!$request->{queryseq}) {
+            send_error_response(400, "INVALID_REQUEST",
+                "Missing required field: queryseq");
+            return;
+        }
+        $request->{querylabel} ||= 'queryseq';
+
+        # Handle database/db mutual exclusion
+        if (defined $request->{database} && $request->{database} ne '' &&
+            defined $request->{db} && $request->{db} ne '') {
+            send_error_response(400, "INVALID_REQUEST",
+                "Cannot specify both 'database' and 'db'. Use one or the other.");
+            return;
+        }
+        $request->{database} = $request->{database} || $request->{db} || $default_database;
+        $request->{db} = $request->{database};  # Keep db for compatibility
+
+        # Handle index vs individual params mutual exclusion
+        my @index_params = qw(kmersize occurbitlen maxpappear maxnappear precludehighfreqkmer);
+        if (defined $request->{index} && $request->{index} ne '') {
+            for my $param (@index_params) {
+                if (defined $request->{$param} && $request->{$param} ne '') {
+                    send_error_response(400, "INVALID_REQUEST",
+                        "Cannot specify both 'index' and '$param'. Use 'index' alone or individual parameters.");
+                    return;
+                }
+            }
+
+            # Parse index name to extract parameters
+            my $parsed = parse_gin_index_name($request->{index});
+            if (!$parsed) {
+                send_error_response(400, "INVALID_REQUEST",
+                    "Invalid index name format: $request->{index}");
+                return;
+            }
+
+            $request->{kmersize} = $parsed->{kmer_size};
+            $request->{occurbitlen} = $parsed->{occur_bitlen};
+            $request->{maxpappear} = $parsed->{max_appearance_rate};
+            $request->{maxnappear} = $parsed->{max_appearance_nrow};
+            $request->{precludehighfreqkmer} = $parsed->{preclude_highfreq_kmer};
+            $request->{index_name} = $request->{index};
+        } else {
+            # Apply defaults for individual params if not specified
+            $request->{kmersize} = $request->{kmersize} // ($default_kmersize ne '' ? $default_kmersize : undef);
+            $request->{occurbitlen} = $request->{occurbitlen} // ($default_occurbitlen ne '' ? $default_occurbitlen : undef);
+            $request->{maxpappear} = $request->{maxpappear} // ($default_maxpappear ne '' ? $default_maxpappear : undef);
+            $request->{maxnappear} = $request->{maxnappear} // ($default_maxnappear ne '' ? $default_maxnappear : undef);
+            $request->{precludehighfreqkmer} = $request->{precludehighfreqkmer} // ($default_precludehighfreqkmer ne '' ? $default_precludehighfreqkmer : undef);
+        }
+
+        # Validate maxpappear precision
+        if (defined $request->{maxpappear} && $request->{maxpappear} ne '') {
+            my $error = validate_maxpappear_precision($request->{maxpappear}, "Request");
+            if ($error) {
+                send_error_response(400, "INVALID_REQUEST", $error);
                 return;
             }
         }
-        
-        # Set defaults
-        $request->{db} ||= $default_database;
+
+        # Set other defaults
         $request->{subset} ||= $default_subset;
         $request->{maxnseq} ||= $default_maxnseq;
         $request->{minscore} ||= $default_minscore;
         $request->{minpsharedkmer} ||= $default_minpsharedkmer;
         $request->{mode} ||= $default_mode;
-        
+
         # Normalize and validate mode
         my $normalized_mode = normalize_mode($request->{mode});
         if (!$normalized_mode) {
@@ -325,14 +404,14 @@ sub handle_search_async {
             return;
         }
         $request->{mode} = $normalized_mode;
-        
+
         # Validate values
         if ($request->{maxnseq} > $maxmaxnseq) {
             send_error_response(400, "INVALID_REQUEST",
                 "maxnseq value ($request->{maxnseq}) exceeds maximum allowed value ($maxmaxnseq)");
             return;
         }
-        
+
         # Validate minpsharedkmer if specified
         if (defined $request->{minpsharedkmer} && $request->{minpsharedkmer} ne '') {
             if ($request->{minpsharedkmer} < 0.0 || $request->{minpsharedkmer} > 1.0) {
@@ -341,33 +420,87 @@ sub handle_search_async {
                 return;
             }
         }
-        
+
+        # Validate database exists in available_databases (if configured)
+        if (@available_databases > 0) {
+            my $db_found = 0;
+            for my $db (@available_databases) {
+                if ($db eq $request->{database}) {
+                    $db_found = 1;
+                    last;
+                }
+            }
+            if (!$db_found) {
+                send_error_response(400, "INVALID_REQUEST",
+                    "Database '$request->{database}' is not in the list of available databases.");
+                return;
+            }
+        }
+
+        # Validate subset exists (if configured)
+        if (defined $request->{subset} && $request->{subset} ne '' && @available_subsets > 0) {
+            my $subset_spec = "$request->{database}:$request->{subset}";
+            my $subset_found = 0;
+            for my $sub (@available_subsets) {
+                if ($sub eq $subset_spec || $sub eq $request->{subset}) {
+                    $subset_found = 1;
+                    last;
+                }
+            }
+            if (!$subset_found) {
+                send_error_response(400, "INVALID_REQUEST",
+                    "Subset '$request->{subset}' is not available for database '$request->{database}'.");
+                return;
+            }
+        }
+
+        # Select GIN index if not already specified
+        if (!$request->{index_name}) {
+            my $index_result = select_gin_index_for_request($request);
+            if ($index_result->{error}) {
+                if ($index_result->{matching_indexes}) {
+                    send_error_response(400, "MULTIPLE_INDEX_MATCH",
+                        "$index_result->{error} Matching indexes: " . join(", ", @{$index_result->{matching_indexes}}));
+                } else {
+                    send_error_response(400, "INVALID_REQUEST", $index_result->{error});
+                }
+                return;
+            }
+
+            $request->{index_name} = $index_result->{index_name};
+            $request->{kmersize} = $index_result->{params}->{kmer_size};
+            $request->{occurbitlen} = $index_result->{params}->{occur_bitlen};
+            $request->{maxpappear} = $index_result->{params}->{max_appearance_rate};
+            $request->{maxnappear} = $index_result->{params}->{max_appearance_nrow};
+            $request->{precludehighfreqkmer} = $index_result->{params}->{preclude_highfreq_kmer};
+        }
+
         # Generate job ID with retry logic
         my $job_id;
         my $max_retries = 10;
         for my $retry (1..$max_retries) {
             $job_id = generate_job_id();
-            
+
             # Try to insert job into database
             if (create_job($job_id, $request)) {
                 last;
             }
-            
+
             if ($retry == $max_retries) {
                 send_error_response(500, "INTERNAL_ERROR",
                     "Failed to generate unique job ID after $max_retries retries");
                 return;
             }
         }
-        
+
         # Start background job
         start_background_job($job_id, $request);
-        
+
         # Return job ID to client
         send_success_response({ job_id => $job_id });
-        
+
     };
-    
+
     if ($@) {
         send_error_response(400, "INVALID_REQUEST", "Request error: $@");
     }
@@ -489,15 +622,27 @@ sub handle_metadata_request {
     my ($cgi) = @_;
 
     eval {
-        send_success_response({
+        my $response = {
+            server_version => $VERSION,
             default_database => $default_database,
-            default_subset => $default_subset,
             default_maxnseq => $default_maxnseq,
             default_minscore => $default_minscore,
-            server_version => $VERSION,
+            available_databases => \@available_databases,
+            available_subsets => \@available_subsets,
+            available_indices => \@available_indices,
             accept_gzip_request => JSON::true,
             supported_endpoints => ["/search", "/result", "/status", "/cancel", "/metadata"]
-        });
+        };
+
+        # Add optional fields only if they have values
+        $response->{default_subset} = $default_subset if $default_subset ne '';
+        $response->{default_kmersize} = int($default_kmersize) if $default_kmersize ne '';
+        $response->{default_occurbitlen} = int($default_occurbitlen) if $default_occurbitlen ne '';
+        $response->{default_maxpappear} = $default_maxpappear + 0 if $default_maxpappear ne '';
+        $response->{default_maxnappear} = int($default_maxnappear) if $default_maxnappear ne '';
+        $response->{default_precludehighfreqkmer} = ($default_precludehighfreqkmer ? JSON::true : JSON::false) if $default_precludehighfreqkmer ne '';
+
+        send_success_response($response);
     };
 
     if ($@) {
@@ -533,6 +678,12 @@ CREATE TABLE IF NOT EXISTS kafsssearchserver_jobs (
     queryseq TEXT NOT NULL,
     db TEXT NOT NULL,
     subset TEXT,
+    index_name TEXT NOT NULL,
+    kmersize INTEGER NOT NULL,
+    occurbitlen INTEGER NOT NULL,
+    maxpappear REAL NOT NULL,
+    maxnappear INTEGER NOT NULL,
+    precludehighfreqkmer INTEGER NOT NULL,
     maxnseq INTEGER NOT NULL,
     minscore INTEGER NOT NULL,
     mode TEXT NOT NULL,
@@ -605,7 +756,7 @@ sub generate_job_id {
 sub normalize_mode {
     my ($mode) = @_;
     return '' unless defined $mode;
-    
+
     # Normalize mode aliases
     my %mode_aliases = (
         'min' => 'minimum',
@@ -619,12 +770,345 @@ sub normalize_mode {
         'maximize' => 'maximum',
         'maximum' => 'maximum'
     );
-    
+
     my $normalized = $mode_aliases{lc($mode)};
     return '' unless $normalized;
-    
+
     # Check if mode is accepted
     return grep { $_ eq $normalized } @accepted_modes ? $normalized : '';
+}
+
+# Get list of GIN indexes on kafsss_data.seq column
+sub get_gin_indexes {
+    my ($dbh) = @_;
+
+    my $sth = $dbh->prepare(<<SQL);
+SELECT indexname
+FROM pg_indexes
+WHERE tablename = 'kafsss_data'
+  AND indexname LIKE 'idx_kafsss_data_seq_gin_km%'
+ORDER BY indexname
+SQL
+    $sth->execute();
+
+    my @indexes = ();
+    while (my ($indexname) = $sth->fetchrow_array()) {
+        push @indexes, $indexname;
+    }
+    $sth->finish();
+
+    return \@indexes;
+}
+
+# Parse GIN index name to extract parameters
+sub parse_gin_index_name {
+    my ($indexname) = @_;
+
+    if ($indexname =~ /idx_kafsss_data_seq_gin_km(\d+)_ob(\d+)_mar(\d{4})_man(\d+)_phk([TF])/) {
+        return {
+            kmer_size => int($1),
+            occur_bitlen => int($2),
+            max_appearance_rate => $3 / 1000,
+            max_appearance_nrow => int($4),
+            preclude_highfreq_kmer => ($5 eq 'T' ? 1 : 0)
+        };
+    }
+
+    return undef;
+}
+
+# Select appropriate GIN index based on target parameters
+sub select_gin_index {
+    my ($dbh, $indexes, $target_params, $dbname) = @_;
+
+    my $index_count = scalar(@$indexes);
+
+    if ($index_count == 0) {
+        return { error => "No GIN indexes found on kafsss_data.seq column in database '$dbname'." };
+    }
+
+    # If only one index exists, use it
+    if ($index_count == 1) {
+        my $parsed = parse_gin_index_name($indexes->[0]);
+        if (!$parsed) {
+            return { error => "Cannot parse GIN index name: $indexes->[0]" };
+        }
+        return {
+            index_name => $indexes->[0],
+            params => $parsed
+        };
+    }
+
+    # Multiple indexes - filter by target parameters
+    my @matching_indexes = ();
+
+    for my $indexname (@$indexes) {
+        my $parsed = parse_gin_index_name($indexname);
+        next unless $parsed;
+
+        my $matches = 1;
+
+        if (defined $target_params->{kmer_size} && $target_params->{kmer_size} ne '') {
+            $matches = 0 if $parsed->{kmer_size} != $target_params->{kmer_size};
+        }
+        if (defined $target_params->{occur_bitlen} && $target_params->{occur_bitlen} ne '') {
+            $matches = 0 if $parsed->{occur_bitlen} != $target_params->{occur_bitlen};
+        }
+        if (defined $target_params->{max_appearance_rate} && $target_params->{max_appearance_rate} ne '') {
+            $matches = 0 if abs($parsed->{max_appearance_rate} - $target_params->{max_appearance_rate}) >= 0.0001;
+        }
+        if (defined $target_params->{max_appearance_nrow} && $target_params->{max_appearance_nrow} ne '') {
+            $matches = 0 if $parsed->{max_appearance_nrow} != $target_params->{max_appearance_nrow};
+        }
+        if (defined $target_params->{preclude_highfreq_kmer} && $target_params->{preclude_highfreq_kmer} ne '') {
+            $matches = 0 if $parsed->{preclude_highfreq_kmer} != $target_params->{preclude_highfreq_kmer};
+        }
+
+        if ($matches) {
+            push @matching_indexes, {
+                index_name => $indexname,
+                params => $parsed
+            };
+        }
+    }
+
+    my $match_count = scalar(@matching_indexes);
+
+    if ($match_count == 0) {
+        my @match_names = map { $_ } @$indexes;
+        return {
+            error => "No matching GIN index found for the specified parameters.",
+            available_indexes => \@match_names
+        };
+    }
+
+    if ($match_count == 1) {
+        return $matching_indexes[0];
+    }
+
+    # Multiple matches
+    my @match_names = map { $_->{index_name} } @matching_indexes;
+    return {
+        error => "Multiple GIN indexes match the specified parameters.",
+        matching_indexes => \@match_names
+    };
+}
+
+# Validate maxpappear precision (max 3 decimal places)
+sub validate_maxpappear_precision {
+    my ($value, $context) = @_;
+
+    return undef if !defined $value || $value eq '';  # Unspecified is allowed
+
+    my $value_str = sprintf("%.10f", $value);
+    if ($value_str =~ /\.\d{4,}[1-9]/) {
+        return "$context max_appearance_rate '$value' has more than 3 decimal places. Maximum 3 decimal places allowed (e.g., 0.050, 0.125).";
+    }
+
+    return undef;  # No error
+}
+
+# Validate all configured databases at startup
+sub validate_all_databases {
+    my ($pg_host, $pg_port, $pg_user, $pg_password) = @_;
+
+    my @indices = ();
+
+    # If no databases configured, skip validation
+    if (@available_databases == 0) {
+        print STDERR "Warning: No databases configured in \@available_databases.\n";
+        return \@indices;
+    }
+
+    for my $dbname (@available_databases) {
+        print STDERR "Validating database: $dbname\n";
+
+        # Connect to database
+        my $dsn = "DBI:Pg:dbname=$dbname;host=$pg_host;port=$pg_port";
+        my $dbh = eval {
+            DBI->connect($dsn, $pg_user, $pg_password, {
+                AutoCommit => 1,
+                PrintError => 0,
+                RaiseError => 1,
+                ShowErrorStatement => 1,
+                AutoInactiveDestroy => 1,
+                pg_enable_utf8 => 1
+            });
+        };
+
+        if (!$dbh || $@) {
+            die "Error: Cannot connect to database '$dbname': " . ($@ || $DBI::errstr) . "\n";
+        }
+
+        # Check kafsss_data and kafsss_meta tables exist
+        my $sth = $dbh->prepare("SELECT COUNT(*) FROM information_schema.tables WHERE table_name IN ('kafsss_data', 'kafsss_meta')");
+        $sth->execute();
+        my ($table_count) = $sth->fetchrow_array();
+        $sth->finish();
+
+        if ($table_count < 2) {
+            $dbh->disconnect();
+            die "Error: Database '$dbname' is missing required tables (kafsss_data, kafsss_meta).\n";
+        }
+
+        # Get GIN indexes
+        my $indexes = get_gin_indexes($dbh);
+        if (scalar(@$indexes) == 0) {
+            $dbh->disconnect();
+            die "Error: No GIN indexes found in database '$dbname'. Please create indexes first using kafssindex.\n";
+        }
+
+        # Add to available_indices with "database:indexname" format
+        for my $idx (@$indexes) {
+            push @indices, "$dbname:$idx";
+        }
+
+        # Validate configured subsets for this database
+        for my $subset_spec (@available_subsets) {
+            my ($subset_db, $subset_name) = split(/:/, $subset_spec, 2);
+            if ($subset_db eq $dbname) {
+                # Check if subset exists in kafsss_data
+                $sth = $dbh->prepare("SELECT 1 FROM kafsss_data WHERE ? = ANY(subset) LIMIT 1");
+                $sth->execute($subset_name);
+                my $exists = $sth->fetchrow_array();
+                $sth->finish();
+
+                if (!$exists) {
+                    $dbh->disconnect();
+                    die "Error: Subset '$subset_name' not found in database '$dbname'.\n";
+                }
+                print STDERR "  Validated subset: $subset_name\n";
+            }
+        }
+
+        print STDERR "  Found " . scalar(@$indexes) . " GIN index(es)\n";
+        $dbh->disconnect();
+    }
+
+    return \@indices;
+}
+
+# Validate default database configuration
+sub validate_default_database {
+    my ($pg_host, $pg_port, $pg_user, $pg_password) = @_;
+
+    return if $default_database eq '';
+
+    print STDERR "Validating default database configuration...\n";
+
+    # Connect to default database
+    my $dsn = "DBI:Pg:dbname=$default_database;host=$pg_host;port=$pg_port";
+    my $dbh = eval {
+        DBI->connect($dsn, $pg_user, $pg_password, {
+            AutoCommit => 1,
+            PrintError => 0,
+            RaiseError => 1,
+            ShowErrorStatement => 1,
+            AutoInactiveDestroy => 1,
+            pg_enable_utf8 => 1
+        });
+    };
+
+    if (!$dbh || $@) {
+        die "Error: Cannot connect to default database '$default_database': " . ($@ || $DBI::errstr) . "\n";
+    }
+
+    # Validate default_subset if specified
+    if ($default_subset ne '') {
+        my ($subset_db, $subset_name) = split(/:/, $default_subset, 2);
+
+        # If no colon, assume it's just a subset name for the default database
+        if (!defined $subset_name) {
+            $subset_name = $default_subset;
+            $subset_db = $default_database;
+        }
+
+        if ($subset_db ne $default_database) {
+            $dbh->disconnect();
+            die "Error: default_subset database '$subset_db' does not match default_database '$default_database'.\n";
+        }
+
+        my $sth = $dbh->prepare("SELECT 1 FROM kafsss_data WHERE ? = ANY(subset) LIMIT 1");
+        $sth->execute($subset_name);
+        my $exists = $sth->fetchrow_array();
+        $sth->finish();
+
+        if (!$exists) {
+            $dbh->disconnect();
+            die "Error: Default subset '$subset_name' not found in default database '$default_database'.\n";
+        }
+    }
+
+    # Build target params from defaults
+    my $target_params = {
+        kmer_size => $default_kmersize,
+        occur_bitlen => $default_occurbitlen,
+        max_appearance_rate => $default_maxpappear,
+        max_appearance_nrow => $default_maxnappear,
+        preclude_highfreq_kmer => $default_precludehighfreqkmer
+    };
+
+    # Get GIN indexes and validate that defaults match exactly one
+    my $indexes = get_gin_indexes($dbh);
+    my $result = select_gin_index($dbh, $indexes, $target_params, $default_database);
+
+    if ($result->{error}) {
+        $dbh->disconnect();
+        if ($result->{matching_indexes}) {
+            my $list = join("\n  - ", @{$result->{matching_indexes}});
+            die "Error: $result->{error}\nMatching indexes:\n  - $list\nPlease specify more specific default parameters.\n";
+        } elsif ($result->{available_indexes}) {
+            my $list = join("\n  - ", @{$result->{available_indexes}});
+            die "Error: $result->{error}\nAvailable indexes:\n  - $list\n";
+        } else {
+            die "Error: $result->{error}\n";
+        }
+    }
+
+    print STDERR "Default GIN index: $result->{index_name}\n";
+    $dbh->disconnect();
+}
+
+# Select GIN index for a search request
+sub select_gin_index_for_request {
+    my ($request) = @_;
+
+    # Connect to the database
+    my $password = $default_password;
+    my $dsn = "DBI:Pg:dbname=$request->{database};host=$host;port=$port";
+
+    my $dbh = eval {
+        DBI->connect($dsn, $username, $password, {
+            AutoCommit => 1,
+            PrintError => 0,
+            RaiseError => 1,
+            ShowErrorStatement => 1,
+            AutoInactiveDestroy => 1,
+            pg_enable_utf8 => 1
+        });
+    };
+
+    if (!$dbh || $@) {
+        return { error => "Cannot connect to database '$request->{database}': " . ($@ || $DBI::errstr) };
+    }
+
+    # Get GIN indexes
+    my $indexes = get_gin_indexes($dbh);
+
+    # Build target params from request
+    my $target_params = {
+        kmer_size => $request->{kmersize},
+        occur_bitlen => $request->{occurbitlen},
+        max_appearance_rate => $request->{maxpappear},
+        max_appearance_nrow => $request->{maxnappear},
+        preclude_highfreq_kmer => $request->{precludehighfreqkmer}
+    };
+
+    my $result = select_gin_index($dbh, $indexes, $target_params, $request->{database});
+
+    $dbh->disconnect();
+
+    return $result;
 }
 
 sub format_timestamp {
@@ -746,7 +1230,7 @@ sub get_current_job_count {
 
 sub create_job {
     my ($job_id, $request) = @_;
-    
+
     my $dbh = DBI->connect("dbi:SQLite:dbname=$sqlite_path", "", "", {
         AutoCommit => 1,
         PrintError => 0,
@@ -755,12 +1239,12 @@ sub create_job {
         AutoInactiveDestroy => 1,
         sqlite_unicode => 1
     });
-    
+
     eval {
         my $timeout_time = format_timestamp(time() + $job_timeout);
-        
+
         $dbh->do(
-            "INSERT INTO kafsssearchserver_jobs (job_id, time, querylabel, queryseq, db, subset, maxnseq, minscore, mode, status, timeout_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)",
+            "INSERT INTO kafsssearchserver_jobs (job_id, time, querylabel, queryseq, db, subset, index_name, kmersize, occurbitlen, maxpappear, maxnappear, precludehighfreqkmer, maxnseq, minscore, mode, status, timeout_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)",
             undef,
             $job_id,
             format_timestamp(),
@@ -768,15 +1252,21 @@ sub create_job {
             $request->{queryseq},
             $request->{db},
             $request->{subset},
+            $request->{index_name},
+            $request->{kmersize},
+            $request->{occurbitlen},
+            $request->{maxpappear},
+            $request->{maxnappear},
+            $request->{precludehighfreqkmer} ? 1 : 0,
             $request->{maxnseq},
             $request->{minscore},
             $request->{mode},
             $timeout_time
         );
     };
-    
+
     $dbh->disconnect();
-    
+
     return !$@;  # Return true if no error occurred
 }
 
@@ -846,16 +1336,12 @@ sub execute_search_job {
         # Validate database permissions and schema
         validate_database_permissions($pg_dbh, $username);
         validate_database_schema($pg_dbh);
-        
-        # Get metadata and store for response building
-        my $metadata = get_metadata_from_meta($pg_dbh);
-        my $current_kmer_size = $metadata->{kmer_size};
-        
+
         # Perform the search (reusing existing search logic)
         my $results = perform_database_search($pg_dbh, $request);
-        
+
         # Build response based on mode
-        my $response = build_search_response($request, $results, $current_kmer_size);
+        my $response = build_search_response($request, $results);
         
         # Store result in results table
         store_job_result($job_id, $response);
@@ -1015,17 +1501,17 @@ sub store_job_result {
 # Search execution methods (reusing existing logic)
 sub perform_database_search {
     my ($dbh, $request) = @_;
-    
+
     # Verify database structure
     eval {
         my $sth = $dbh->prepare("SELECT 1 FROM pg_extension WHERE extname = 'pg_kmersearch'");
         $sth->execute();
         my $ext_exists = $sth->fetchrow_array();
         $sth->finish();
-        
-        die "pg_kmersearch extension is not installed in database '$request->{db}'\n" 
+
+        die "pg_kmersearch extension is not installed in database '$request->{db}'\n"
             unless $ext_exists;
-        
+
         # Check if kafsss_data table exists
         $sth = $dbh->prepare("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'kafsss_data'");
         $sth->execute();
@@ -1035,36 +1521,34 @@ sub perform_database_search {
         die "Table 'kafsss_data' does not exist in database '$request->{db}'\n"
             unless $table_count > 0;
 
-        # Check if database has k-mer indexes (seq column GIN index)
+        # Check if specified index exists
         $sth = $dbh->prepare(<<SQL);
 SELECT 1 FROM pg_indexes
 WHERE tablename = 'kafsss_data'
-  AND indexname LIKE 'idx_kafsss_data_seq_gin_km%'
+  AND indexname = ?
 LIMIT 1
 SQL
-        $sth->execute();
-        my $has_kmer_index = $sth->fetchrow_array();
+        $sth->execute($request->{index_name});
+        my $index_exists = $sth->fetchrow_array();
         $sth->finish();
 
-        die "Database '$request->{db}' does not have k-mer indexes.\n" .
-            "Please create indexes first using: kafssindex --mode=create $request->{db}\n"
-            unless $has_kmer_index;
+        die "GIN index '$request->{index_name}' does not exist in database '$request->{db}'.\n"
+            unless $index_exists;
     };
 
     if ($@) {
         die "Database validation failed: $@";
     }
 
-    # Get metadata from kafsss_meta table
-    my $metadata = get_metadata_from_meta($dbh);
-    my $kmer_size = $metadata->{kmer_size};
-    
-    # Check for matching high-frequency k-mer data
-    my $use_highfreq_cache = check_highfreq_kmer_exists($dbh, $metadata);
-    
-    # Set kmersearch GUC variables
-    set_kmersearch_guc_variables($dbh, $metadata, $use_highfreq_cache);
-    
+    # Get ovllen from kafsss_meta table
+    my $ovllen = get_ovllen_from_meta($dbh);
+
+    # Use request parameters for GUC variables (from selected index)
+    my $kmer_size = $request->{kmersize};
+
+    # Set kmersearch GUC variables from request parameters
+    set_kmersearch_guc_variables_from_request($dbh, $request);
+
     # Set minimum score if specified
     if (defined $request->{minscore} && $request->{minscore} ne '') {
         eval {
@@ -1074,7 +1558,7 @@ SQL
             die "Failed to set minimum score: $@";
         }
     }
-    
+
     # Set minimum shared key rate if specified
     if (defined $request->{minpsharedkmer} && $request->{minpsharedkmer} ne '') {
         eval {
@@ -1084,9 +1568,6 @@ SQL
             die "Failed to set minimum shared key rate: $@";
         }
     }
-    
-    # Get ovllen for query validation
-    my $ovllen = $metadata->{ovllen};
     
     # Validate query sequence
     my $validation_result = validate_query_sequence($request->{queryseq}, $ovllen, $kmer_size);
@@ -1206,14 +1687,15 @@ SQL
 }
 
 sub build_search_response {
-    my ($request, $results, $kmer_size) = @_;
-    
+    my ($request, $results) = @_;
+
     my $response = {};
-    
+
     if ($request->{mode} eq 'minimum') {
-        # Minimum mode - only results
+        # Minimum mode - only results with essential info
         $response = {
             status => "completed",
+            index_name => $request->{index_name},
             results => $results
         };
     } else {
@@ -1224,24 +1706,65 @@ sub build_search_response {
             queryseq => $request->{queryseq},
             db => $request->{db},
             subset => $request->{subset},
+            index_name => $request->{index_name},
+            kmer_size => $request->{kmersize},
+            occur_bitlen => $request->{occurbitlen},
+            max_appearance_rate => $request->{maxpappear},
+            max_appearance_nrow => $request->{maxnappear},
+            preclude_highfreq_kmer => ($request->{precludehighfreqkmer} ? JSON::true : JSON::false),
             maxnseq => $request->{maxnseq},
             minscore => $request->{minscore},
             mode => $request->{mode},
             results => $results
         };
-        
-        if ($request->{mode} ne 'minimum') {
-            # Add kmer_size for normal and maximum modes
-            $response->{kmer_size} = $kmer_size || 15;
-        }
     }
-    
+
     return $response;
+}
+
+sub get_ovllen_from_meta {
+    my ($dbh) = @_;
+
+    # Query kafsss_meta table to get ovllen only
+    my $sth = $dbh->prepare("SELECT ovllen FROM kafsss_meta LIMIT 1");
+    $sth->execute();
+    my ($ovllen) = $sth->fetchrow_array();
+    $sth->finish();
+
+    if (!defined $ovllen) {
+        die "No ovllen found in kafsss_meta table.\n";
+    }
+
+    return $ovllen;
+}
+
+sub set_kmersearch_guc_variables_from_request {
+    my ($dbh, $request) = @_;
+
+    # Set all kmersearch GUC variables from request parameters
+    eval {
+        $dbh->do("SET kmersearch.kmer_size = $request->{kmersize}");
+        $dbh->do("SET kmersearch.occur_bitlen = $request->{occurbitlen}");
+        $dbh->do("SET kmersearch.max_appearance_rate = $request->{maxpappear}");
+        $dbh->do("SET kmersearch.max_appearance_nrow = $request->{maxnappear}");
+
+        if ($request->{precludehighfreqkmer}) {
+            $dbh->do("SET kmersearch.preclude_highfreq_kmer = true");
+            $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = true");
+        } else {
+            $dbh->do("SET kmersearch.preclude_highfreq_kmer = false");
+            $dbh->do("SET kmersearch.force_use_parallel_highfreq_kmer_cache = false");
+        }
+    };
+
+    if ($@) {
+        die "Failed to set kmersearch GUC variables: $@";
+    }
 }
 
 sub get_metadata_from_meta {
     my ($dbh) = @_;
-    
+
     # Query kafsss_meta table to get all metadata
     my $sth = $dbh->prepare(<<SQL);
 SELECT ovllen, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow

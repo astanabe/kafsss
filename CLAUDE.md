@@ -69,6 +69,29 @@ The `kafsss_meta` table may contain the following index-related columns (added b
 - `preclude_highfreq_kmer`: Whether high-frequency k-mers are excluded (boolean)
 - `seq_index_name`: Name of the GIN index created on seq column
 
+### Multiple GIN Index Support
+
+A single database can have multiple GIN indexes with different parameters. When searching:
+
+**kafsssearch (command-line)**:
+- If only one GIN index exists, it is automatically selected
+- If multiple indexes exist, specify parameters to select one:
+  - `--kmersize=N`: Match kmer_size value
+  - `--occurbitlen=N`: Match occur_bitlen value
+  - `--maxpappear=N.NNN`: Match max_appearance_rate (max 3 decimal places)
+  - `--maxnappear=N`: Match max_appearance_nrow value
+  - `--precludehighfreqkmer`: Match preclude_highfreq_kmer=true
+- Parameters are matched partially - unspecified parameters match any value
+- Error if no index matches or multiple indexes match the specified parameters
+
+**Server components (kafsssearchserver.\*)**:
+- Configure `@available_databases` array for multi-database support
+- Configure `@available_subsets` array for subset validation
+- Default GIN index parameters can be set for automatic selection
+- `/search` API accepts optional parameters: `kmersize`, `occurbitlen`, `maxpappear`, `maxnappear`, `precludehighfreqkmer`
+- Alternatively, specify `index` parameter with full index name
+- `/metadata` endpoint returns `available_databases`, `available_subsets`, and `available_indices`
+
 ### Compressed Output Formats
 
 kafsssearch and kafsssearchclient support compressed output using external compression tools:
@@ -117,7 +140,7 @@ The following GUC variables must be set every time a PostgreSQL database connect
 - `kmersearch.preclude_highfreq_kmer`
 - `kmersearch.force_use_parallel_highfreq_kmer_cache`
 
-**kafsssearch**:
+**kafsssearch** (parameters extracted from selected GIN index name):
 - `kmersearch.kmer_size`
 - `kmersearch.occur_bitlen`
 - `kmersearch.max_appearance_rate`
@@ -127,7 +150,7 @@ The following GUC variables must be set every time a PostgreSQL database connect
 - `kmersearch.min_score`
 - `kmersearch.min_shared_kmer_rate`
 
-**kafsssearchserver.\*** (all server variants):
+**kafsssearchserver.\*** (parameters extracted from selected GIN index name):
 - `kmersearch.kmer_size`
 - `kmersearch.occur_bitlen`
 - `kmersearch.max_appearance_rate`

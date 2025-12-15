@@ -586,6 +586,15 @@ kafsssearch [オプション] 入力ファイル名 出力ファイル名
 - `--outfmt=FORMAT` - 出力形式: TSV（デフォルト）、multiTSV、FASTA、multiFASTA、BLASTDB。圧縮接尾辞（.gz、.bz2、.xz、.zst）対応
 - `--numthreads=INT` - 並列スレッド数（デフォルト: 1）
 
+**GINインデックス選択**（複数インデックスがあるデータベースの場合）：
+- `--kmersize=INT` - 一致するkmer_sizeのインデックスを選択
+- `--occurbitlen=INT` - 一致するoccur_bitlenのインデックスを選択
+- `--maxpappear=REAL` - 一致するmax_appearance_rateのインデックスを選択（最大3桁の小数）
+- `--maxnappear=INT` - 一致するmax_appearance_nrowのインデックスを選択
+- `--precludehighfreqkmer` - preclude_highfreq_kmer=trueのインデックスを選択
+
+データベースにGINインデックスが1つしかない場合は自動的に選択されます。複数存在する場合は、パラメータを指定して一意に識別してください。
+
 #### 入出力ファイル
 - 入力: マルチFASTA形式、標準入力の場合は `-`、`stdin`、または `STDIN`
 - 出力: TSV形式、標準出力の場合は `-`、`stdout`、または `STDOUT`
@@ -617,6 +626,10 @@ kafsssearch --db=mydb --outfmt=BLASTDB query.fasta results
 
 # 圧縮出力
 kafsssearch --db=mydb --outfmt=TSV.gz query.fasta results.tsv.gz
+
+# 複数GINインデックス - パラメータを指定してインデックスを選択
+kafsssearch --db=mydb --kmersize=8 query.fasta results.tsv
+kafsssearch --db=mydb --kmersize=8 --precludehighfreqkmer query.fasta results.tsv
 ```
 
 #### 圧縮ツール
@@ -807,7 +820,27 @@ my $default_maxnseq = 1000;             # デフォルト最大結果数（0=無
 my $default_minscore = 1;               # デフォルト最小スコア
 my $default_minpsharedkmer = 0.5;       # デフォルト最小共有k-mer率
 my $default_numthreads = 5;             # 並列スレッド数
+
+# データベース設定 - 複数データベースサポート
+my @available_databases = ('mykmersearch', 'otherdb');  # 利用可能なデータベース名の配列
+
+# サブセット設定（形式："データベース名:サブセット名"）
+my @available_subsets = ('mykmersearch:bacteria', 'mykmersearch:archaea');
+
+# デフォルトGINインデックスパラメータ（すべて任意、インデックス選択に使用）
+my $default_kmersize = '';           # デフォルトkmer_size値（空=未指定）
+my $default_occurbitlen = '';        # デフォルトoccur_bitlen値
+my $default_maxpappear = '';         # デフォルトmax_appearance_rate（小数点以下3桁まで）
+my $default_maxnappear = '';         # デフォルトmax_appearance_nrow値
+my $default_precludehighfreqkmer = '';  # デフォルトpreclude_highfreq_kmer（1、0、または空）
 ```
+
+サーバー起動時に以下を検証：
+- `@available_databases`内のすべてのデータベースに接続可能
+- 各データベースに必要なテーブル（kafsss_data, kafsss_meta）が存在
+- 各データベースに少なくとも1つのGINインデックスが存在
+- `@available_subsets`で設定されたすべてのサブセットがそれぞれのデータベースに存在
+- デフォルトデータベースとGINインデックスパラメータが一意にインデックスを識別
 
 #### APIエンドポイント
 
@@ -818,12 +851,40 @@ my $default_numthreads = 5;             # 並列スレッド数
 {
   "querylabel": "配列名",
   "queryseq": "ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG",
-  "db": "データベース名",
+  "database": "データベース名",
   "subset": "サブセット名",
   "maxnseq": 1000,
-  "minscore": 10
+  "minscore": 10,
+  "minpsharedkmer": 0.5,
+  "mode": "matchscore",
+  "kmersize": 8,
+  "occurbitlen": 8,
+  "maxpappear": 0.050,
+  "maxnappear": 0,
+  "precludehighfreqkmer": 1
 }
 ```
+
+リクエストパラメータ：
+- `queryseq`（必須）：クエリ配列（A/C/G/T/Uおよび縮重コードのみ）
+- `querylabel`（任意）：クエリのラベル（デフォルト："queryseq"）
+- `database`または`db`（任意）：データベース名（デフォルト：設定されたデフォルト値）
+- `subset`（任意）：結果フィルタリング用のサブセット名
+- `maxnseq`（任意）：最大結果数（デフォルト：設定されたデフォルト値、0=無制限）
+- `minscore`（任意）：最小スコア閾値（デフォルト：設定されたデフォルト値）
+- `minpsharedkmer`（任意）：最小共有k-mer率（デフォルト：0.5、範囲：0.0-1.0）
+- `mode`（任意）：検索モード - `minimum`/`min`、`matchscore`/`score`、`sequence`/`seq`、`maximum`/`max`
+
+**GINインデックス選択**（複数インデックスがあるデータベースの場合）：
+- `index`（任意）：完全なGINインデックス名（例：`idx_kafsss_data_seq_gin_km8_ob8_mar0500_man0_phkT`）
+- または個別パラメータを指定してマッチング：
+  - `kmersize`：kmer_size値にマッチ
+  - `occurbitlen`：occur_bitlen値にマッチ
+  - `maxpappear`：max_appearance_rate値にマッチ（小数点以下3桁まで）
+  - `maxnappear`：max_appearance_nrow値にマッチ
+  - `precludehighfreqkmer`：preclude_highfreq_kmerにマッチ（1=true、0=false）
+
+注意：`index`と個別パラメータを同時に指定することはできません。データベースにGINインデックスが1つしかない場合は自動的に選択されます。
 
 レスポンスJSON（ジョブ投入成功）:
 ```json
@@ -901,15 +962,28 @@ my $default_numthreads = 5;             # 並列スレッド数
 ```json
 {
   "success": true,
+  "server_version": "0.1.2025.12.13",
   "default_database": "mykmersearch",
   "default_subset": "bacteria",
   "default_maxnseq": 1000,
-  "default_minscore": "10",
-  "server_version": "0.1.2025.12.13",
+  "default_minscore": 10,
+  "default_kmersize": 8,
+  "default_occurbitlen": 8,
+  "default_maxpappear": 0.050,
+  "default_maxnappear": 0,
+  "default_precludehighfreqkmer": true,
+  "available_databases": ["mykmersearch", "otherdb"],
+  "available_subsets": ["mykmersearch:bacteria", "mykmersearch:archaea"],
+  "available_indices": [
+    "mykmersearch:idx_kafsss_data_seq_gin_km8_ob8_mar0500_man0_phkT",
+    "otherdb:idx_kafsss_data_seq_gin_km8_ob8_mar0500_man0_phkT"
+  ],
   "accept_gzip_request": true,
   "supported_endpoints": ["/search", "/result", "/status", "/cancel", "/metadata"]
 }
 ```
+
+注意：`default_kmersize`、`default_occurbitlen`、`default_maxpappear`、`default_maxnappear`、`default_precludehighfreqkmer`、`default_subset`は設定されている場合のみ含まれます。
 
 #### 使用例
 ```bash
