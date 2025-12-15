@@ -617,15 +617,15 @@ SQL
 
 sub check_meta_table_schema {
     my ($dbh) = @_;
-    
+
     my $sth = $dbh->prepare(<<SQL);
 SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END AS data_type
-FROM information_schema.columns 
-WHERE table_name = 'kafsss_meta' 
+FROM information_schema.columns
+WHERE table_name = 'kafsss_meta'
 ORDER BY column_name
 SQL
     $sth->execute();
-    
+
     my %expected = (
         'ver' => 'text',
         'minlen' => 'integer',
@@ -633,13 +633,7 @@ SQL
         'ovllen' => 'smallint',
         'nseq' => 'bigint',
         'nchar' => 'bigint',
-        'subset' => 'jsonb',
-        'kmer_size' => 'integer',
-        'occur_bitlen' => 'integer',
-        'max_appearance_rate' => 'real',
-        'max_appearance_nrow' => 'integer',
-        'preclude_highfreq_kmer' => 'boolean',
-        'seq_index_name' => 'text'
+        'subset' => 'jsonb'
     );
 
     my %actual = ();
@@ -651,16 +645,11 @@ SQL
     return %actual == %expected &&
            $actual{ver} eq $expected{ver} &&
            $actual{minlen} eq $expected{minlen} &&
+           $actual{minsplitlen} eq $expected{minsplitlen} &&
            $actual{ovllen} eq $expected{ovllen} &&
            $actual{nseq} eq $expected{nseq} &&
            $actual{nchar} eq $expected{nchar} &&
-           $actual{subset} eq $expected{subset} &&
-           $actual{kmer_size} eq $expected{kmer_size} &&
-           $actual{occur_bitlen} eq $expected{occur_bitlen} &&
-           $actual{max_appearance_rate} eq $expected{max_appearance_rate} &&
-           $actual{max_appearance_nrow} eq $expected{max_appearance_nrow} &&
-           $actual{preclude_highfreq_kmer} eq $expected{preclude_highfreq_kmer} &&
-           $actual{seq_index_name} eq $expected{seq_index_name};
+           $actual{subset} eq $expected{subset};
 }
 
 sub check_main_table_schema {
