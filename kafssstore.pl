@@ -372,6 +372,10 @@ $dbh = DBI->connect($dsn, $username, $password, {
     pg_enable_utf8 => 1
 }) or die "Cannot reconnect to database '$output_db': $DBI::errstr\n";
 
+# Set application name for identification in pg_stat_activity
+# Include database name to distinguish from kafssstore processes writing to other databases
+$dbh->do("SET application_name = 'kafssstore:$output_db'");
+
 # Verify table exists
 ensure_table_exists($dbh, 'kafsss_data');
 
@@ -1230,18 +1234,49 @@ sub update_meta_statistics {
 
     print "Attempting to update statistics...\n";
 
-    # Try to acquire ACCESS EXCLUSIVE lock on kafsss_data table with NOWAIT
-    # This ensures only the last process (when no other process is accessing the table)
-    # will successfully update statistics
+    # Advisory Lock key for statistics update coordination
+    my $advisory_lock_key = 1952867187;  # Arbitrary unique key for kafssstore stats update
+    my $my_pid = $dbh->selectrow_array("SELECT pg_backend_pid()");
+
+    # Try to acquire advisory lock (non-blocking first)
+    my ($lock_acquired) = $dbh->selectrow_array(
+        "SELECT pg_try_advisory_lock(?)", undef, $advisory_lock_key
+    );
+
+    unless ($lock_acquired) {
+        # Another process has the lock - wait in queue for handoff
+        print "Waiting in queue for statistics update role...\n";
+        $dbh->do("SELECT pg_advisory_lock(?)", undef, $advisory_lock_key);
+        print "Received statistics update role.\n";
+    }
+
+    # Now we have the lock - check if we are the last process
+    # Match application_name pattern 'kafssstore:<dbname>' and same database
+    my $app_name_pattern = "kafssstore:$output_db";
+    my ($other_count) = $dbh->selectrow_array(
+        "SELECT COUNT(*) FROM pg_stat_activity WHERE application_name = ? AND datname = current_database() AND pid != ?",
+        undef, $app_name_pattern, $my_pid
+    );
+
+    if ($other_count > 0) {
+        # Other processes still exist - hand off the role and exit
+        print "Handing off statistics update role to next process ($other_count remaining).\n";
+        $dbh->do("SELECT pg_advisory_unlock(?)", undef, $advisory_lock_key);
+        return;
+    }
+
+    # We are the last process - perform statistics update
+    print "This is the last process. Performing statistics update.\n";
+
+    # Acquire table lock for statistics update
     eval {
         $dbh->begin_work;
-        $dbh->do("LOCK TABLE kafsss_data IN ACCESS EXCLUSIVE MODE NOWAIT");
+        $dbh->do("LOCK TABLE kafsss_data IN ACCESS EXCLUSIVE MODE");
     };
     if ($@) {
-        # Lock acquisition failed - another process is still accessing the table
-        print "Could not acquire exclusive lock on kafsss_data (other processes still running).\n";
-        print "Statistics update will be handled by the last finishing process.\n";
+        print STDERR "Failed to acquire table lock: $@\n";
         eval { $dbh->rollback; };
+        $dbh->do("SELECT pg_advisory_unlock(?)", undef, $advisory_lock_key);
         return;
     }
 
@@ -1311,10 +1346,15 @@ SQL
         print STDERR "Error updating kafsss_meta statistics: $@\n";
         eval { $dbh->rollback; };
         $sth->finish();
+        # Release advisory lock before dying
+        $dbh->do("SELECT pg_advisory_unlock(?)", undef, $advisory_lock_key);
         die "Statistics update failed: $@\n";
     }
 
     $sth->finish();
+
+    # Release advisory lock
+    $dbh->do("SELECT pg_advisory_unlock(?)", undef, $advisory_lock_key);
 
     print "Statistics update completed.\n";
 }
