@@ -33,27 +33,6 @@ kafsss suiteは、k-mer類似性検索を使用したDNA配列解析の完全な
 - `Time::HiRes` - 高解像度時間関数
 - `Fcntl` - ファイル制御操作
 
-#### スタンドアローンHTTPサーバ（kafsssearchserver.pl）
-コアモジュールに加えて：
-- `JSON` - JSON形式の処理
-- `HTTP::Server::Simple::CGI` - スタンドアローンWebサーバ
-- `MIME::Base64` - Base64エンコード/デコード
-- `Time::HiRes` - 高解像度時間関数
-- `Fcntl` - ファイル制御操作
-- `DBD::SQLite` - SQLiteドライバ（ジョブ管理用）
-- `Crypt::OpenSSL::Random` - 暗号学的に安全な乱数
-
-#### FastCGIサーバ（kafsssearchserver.fcgi）
-コアモジュールに加えて：
-- `JSON` - JSON形式の処理
-- `CGI::Fast` - FastCGI実装
-- `FCGI::ProcManager` - FastCGIプロセス管理
-- `MIME::Base64` - Base64エンコード/デコード
-- `Time::HiRes` - 高解像度時間関数
-- `Fcntl` - ファイル制御操作
-- `DBD::SQLite` - SQLiteドライバ（ジョブ管理用）
-- `Crypt::OpenSSL::Random` - 暗号学的に安全な乱数
-
 #### PSGIサーバ（kafsssearchserver.psgi）
 コアモジュールに加えて：
 - `JSON` - JSON形式の処理
@@ -157,54 +136,6 @@ sudo cpanm DBI DBD::Pg JSON LWP::UserAgent HTTP::Request::Common URI \
            MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
 ```
 
-#### スタンドアローンHTTPサーバ用（kafsssearchserver.pl）
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install -y \
-    perl libdbi-perl libdbd-pg-perl libjson-perl \
-    libhttp-server-simple-perl libdbd-sqlite3-perl \
-    libcrypt-openssl-random-perl
-
-# cpanminusを使用
-sudo cpanm DBI DBD::Pg JSON HTTP::Server::Simple::CGI \
-           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
-```
-
-**RHEL/CentOS/Fedora:**
-```bash
-sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON \
-                    perl-HTTP-Server-Simple perl-DBD-SQLite
-# または dnf を使用
-
-# cpanminusを使用
-sudo cpanm DBI DBD::Pg JSON HTTP::Server::Simple::CGI \
-           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
-```
-
-#### FastCGIサーバ用（kafsssearchserver.fcgi）
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install -y \
-    perl libdbi-perl libdbd-pg-perl libjson-perl \
-    libcgi-fast-perl libfcgi-procmanager-perl \
-    libdbd-sqlite3-perl libcrypt-openssl-random-perl
-
-# cpanminusを使用
-sudo cpanm DBI DBD::Pg JSON CGI::Fast FCGI::ProcManager \
-           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
-```
-
-**RHEL/CentOS/Fedora:**
-```bash
-sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON \
-                    perl-CGI-Fast perl-FCGI-ProcManager perl-DBD-SQLite
-# または dnf を使用
-
-# cpanminusを使用
-sudo cpanm DBI DBD::Pg JSON CGI::Fast FCGI::ProcManager \
-           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
-```
-
 #### PSGIサーバ用（kafsssearchserver.psgi）
 **Ubuntu/Debian:**
 ```bash
@@ -243,16 +174,6 @@ perl -MCPAN -e 'install DBI, DBD::Pg, Getopt::Long, POSIX, File::Basename, Sys::
 perl -MCPAN -e 'install DBI, DBD::Pg, JSON, LWP::UserAgent, HTTP::Request::Common, URI, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
 ```
 
-**スタンドアローンHTTPサーバ用（kafsssearchserver.pl）:**
-```bash
-perl -MCPAN -e 'install DBI, DBD::Pg, JSON, HTTP::Server::Simple::CGI, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
-```
-
-**FastCGIサーバ用（kafsssearchserver.fcgi）:**
-```bash
-perl -MCPAN -e 'install DBI, DBD::Pg, JSON, CGI::Fast, FCGI::ProcManager, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
-```
-
 **PSGIサーバ用（kafsssearchserver.psgi）:**
 ```bash
 perl -MCPAN -e 'install DBI, DBD::Pg, JSON, Plack::Request, Plack::Response, Plack::Builder, Plack::Handler::Starman, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
@@ -284,7 +205,6 @@ perl -MLWP::UserAgent -e 'print "LWP::UserAgent available\n"'
 perl -MURI -e 'print "URI available\n"'
 
 # サーバーモジュールの確認
-perl -MHTTP::Server::Simple -e 'print "HTTP::Server::Simple available\n"'
 perl -MPlack -e 'print "Plack available\n"'
 perl -MStarman -e 'print "Starman available\n"'
 ```
@@ -302,9 +222,7 @@ perl -MStarman -e 'print "Starman available\n"'
 | `kafsspart` | パフォーマンス向上のためのkafsss_dataテーブルのパーティション化 |
 | `kafssfreq` | K-mer頻度分析 |
 | `kafsssearchclient` | 負荷分散機能付きリモートk-mer検索クライアント |
-| `kafsssearchserver.pl` | 非同期ジョブ処理機能付きk-mer検索用REST APIサーバ（スタンドアローン） |
-| `kafsssearchserver.fcgi` | 本番Webサーバ用FastCGI版 |
-| `kafsssearchserver.psgi` | モダンなWebデプロイ用PSGI版 |
+| `kafsssearchserver.psgi` | k-mer検索用PSGIサーバ（スタンドアローン、FastCGI、各種デプロイに対応） |
 | `calcsegment` | 配列分割パラメータ計算用数学ユーティリティ |
 
 ## インストール
@@ -322,7 +240,10 @@ perl -MStarman -e 'print "Starman available\n"'
    sudo make install PREFIX=/opt/kafsssearch
    ```
 
-**注意**: サーバスクリプト（`kafsssearchserver.pl`、`.fcgi`、`.psgi`）はmakeではインストールされません。適切なWebサーバの場所に手動でデプロイしてください。
+**注意**: サーバスクリプトは`installserver`ターゲットで別途インストールします：
+```bash
+make installserver DESTDIR=/var/www/kafsss
+```
 
 ### 手動インストール
 
@@ -798,18 +719,27 @@ kafsssearchclient --resume=20250703T120000-AbCdEf123456     # ジョブ再開
 kafsssearchclient --cancel=20250703T120000-AbCdEf123456     # ジョブキャンセル
 ```
 
-### kafsssearchserver.pl
+### kafsssearchserver.psgi
 
-k-mer検索用REST APIサーバ（スタンドアロンHTTPサーバ）。
+非同期ジョブ処理機能付きk-mer検索用PSGIサーバ。スタンドアローン、FastCGI、各種デプロイ設定に対応。
 
 #### 使用方法
 ```bash
-perl kafsssearchserver.pl [オプション]
+perl kafsssearchserver.psgi [オプション]
 ```
 
 #### オプション
-- `--listen-port=PORT` - HTTPサーバリスンポート（デフォルト: 8080）
-- `--numthreads=INT` - 並列リクエスト処理スレッド数（デフォルト: 5）
+- `--host=HOST` - PostgreSQLサーバホスト（デフォルト: $PGHOST または localhost）
+- `--port=PORT` - PostgreSQLサーバポート（デフォルト: $PGPORT または 5432）
+- `--username=USER` - PostgreSQLユーザー名（デフォルト: $PGUSER または現在のユーザー）
+- `--listenport=PORT` - HTTPサーバリスンポート（デフォルト: 5000）
+- `--numthreads=NUM` - ワーカープロセス数（デフォルト: 5）
+- `--sqlitepath=PATH` - SQLiteデータベースファイルパス（デフォルト: ./kafsssearchserver.sqlite）
+- `--cleanlimit=INT` - 結果保持期間（秒、デフォルト: 86400）
+- `--jobtimeout=INT` - ジョブタイムアウト（秒、デフォルト: 1800）
+- `--maxnjob=INT` - 最大同時ジョブ数（デフォルト: 10）
+- `--cleaninterval=INT` - クリーンアップ間隔（秒、デフォルト: 300）
+- `--help, -h` - ヘルプメッセージを表示
 
 #### 設定
 スクリプトヘッダーでデフォルト値を編集：
@@ -985,16 +915,69 @@ my $default_precludehighfreqkmer = '';  # デフォルトpreclude_highfreq_kmer�
 
 注意：`default_kmersize`、`default_occurbitlen`、`default_maxpappear`、`default_maxnappear`、`default_precludehighfreqkmer`、`default_subset`は設定されている場合のみ含まれます。
 
+#### デプロイオプション
+```bash
+# スタンドアローン（内蔵Starmanサーバ）
+perl kafsssearchserver.psgi
+
+# plackupでの起動（HTTP）
+plackup -p 5000 --workers 10 kafsssearchserver.psgi
+
+# plackupでの起動（FastCGI、Unixソケット経由）
+plackup -s FCGI --listen /var/run/kafsss.sock --nproc 10 kafsssearchserver.psgi
+
+# plackupでの起動（FastCGI、TCPポート経由）
+plackup -s FCGI --listen :9000 --nproc 10 kafsssearchserver.psgi
+
+# spawn-fcgiでの起動（FastCGI）
+spawn-fcgi -s /var/run/kafsss.sock -n -- plackup -s FCGI kafsssearchserver.psgi
+
+# その他のPSGIサーバ
+starman --port 5000 --workers 10 kafsssearchserver.psgi
+uwsgi --http :5000 --psgi kafsssearchserver.psgi
+```
+
+#### NGINX設定（FastCGI）
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location /api/ {
+        include fastcgi_params;
+        fastcgi_pass unix:/var/run/kafsss.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    }
+}
+```
+
+#### NGINX設定（リバースプロキシ）
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
 #### 使用例
 ```bash
-# サーバ起動
-perl kafsssearchserver.pl --listen-port=8080
+# スタンドアローンサーバ起動
+perl kafsssearchserver.psgi
 
-# カスタムスレッド数でサーバ起動
-perl kafsssearchserver.pl --listen-port=8080 --numthreads=10
+# カスタムポートとスレッド数で起動
+perl kafsssearchserver.psgi --listenport=8080 --numthreads=10
+
+# plackupで起動
+plackup -p 8080 --workers 20 kafsssearchserver.psgi
 
 # API呼び出し
-curl -X POST http://localhost:8080/search \
+curl -X POST http://localhost:5000/search \
   -H "Content-Type: application/json" \
   -d '{
     "querylabel": "test_sequence",
@@ -1003,99 +986,7 @@ curl -X POST http://localhost:8080/search \
   }'
 
 # サーバメタデータ取得
-curl http://localhost:8080/metadata
-```
-
-### kafsssearchserver.fcgi
-
-本番Webサーバ（NGINX/Apache）用FastCGI版。
-
-#### 使用方法
-```bash
-perl kafsssearchserver.fcgi [オプション]
-```
-
-#### オプション
-- `--numthreads=NUM` - FastCGIプロセス数（デフォルト: 5）
-
-#### 設定
-kafsssearchserver.plと同様 - スクリプトヘッダーでデフォルト値を編集。
-
-#### NGINX設定
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
-    
-    location /api/search {
-        include fastcgi_params;
-        fastcgi_pass unix:/var/run/kafsssearch.sock;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-    }
-}
-```
-
-#### Apache設定
-```apache
-<VirtualHost *:80>
-    ServerName your-domain.com
-    
-    ScriptAlias /api/search /path/to/kafsssearchserver.fcgi
-    
-    <Directory "/path/to/">
-        SetHandler fcgid-script
-        Options +ExecCGI
-        Require all granted
-    </Directory>
-</VirtualHost>
-```
-
-#### プロセス管理
-```bash
-# FastCGIプロセス起動
-spawn-fcgi -s /var/run/kafsssearch.sock -U nginx -G nginx \
-           -u www-data -g www-data -P /var/run/kafsssearch.pid \
-           -- perl kafsssearchserver.fcgi --numthreads=5
-```
-
-### kafsssearchserver.psgi
-
-様々なPSGIサーバでのモダンなWebデプロイ用PSGI版。
-
-#### 使用方法
-```bash
-perl kafsssearchserver.psgi [オプション]
-```
-
-#### オプション
-- `--host=HOST` - PostgreSQLサーバホスト（デフォルト: $PGHOST または localhost）
-- `--port=PORT` - PostgreSQLサーバポート（デフォルト: $PGPORT または 5432）
-- `--username=USER` - PostgreSQLユーザー名（デフォルト: $PGUSER または現在のユーザー）
-- `--listen-port=PORT` - HTTPサーバリスンポート（デフォルト: 5000）
-- `--workers=NUM` - ワーカープロセス数（デフォルト: 5）
-- `--help, -h` - ヘルプメッセージを表示
-
-#### 設定
-kafsssearchserver.plと同様 - スクリプトヘッダーでデフォルト値を編集。
-
-#### デプロイオプション
-```bash
-# スタンドアローン（内蔵Starmanサーバ）
-perl kafsssearchserver.psgi
-
-# plackupでの起動
-plackup -p 5000 --workers 10 kafsssearchserver.psgi
-
-# その他のPSGIサーバ
-starman --port 5000 --workers 10 kafsssearchserver.psgi
-uwsgi --http :5000 --psgi kafsssearchserver.psgi
-```
-
-#### 使用例
-```bash
-perl kafsssearchserver.psgi
-perl kafsssearchserver.psgi --listen-port=8080 --workers=10
-plackup -p 8080 --workers 20 kafsssearchserver.psgi
+curl http://localhost:5000/metadata
 ```
 
 ## ワークフロー例
@@ -1146,18 +1037,23 @@ plackup -p 8080 --workers 20 kafsssearchserver.psgi
 
 1. **デフォルト値設定:**
    ```perl
-   # kafsssearchserver.fcgiを編集
+   # kafsssearchserver.psgiを編集
    my $default_database = 'mydb';
    my $default_subset = 'bacteria';
    ```
 
-2. **NGINXでのデプロイ:**
+2. **NGINXでのデプロイ（FastCGI）:**
    ```bash
-   spawn-fcgi -s /var/run/kafsssearch.sock \
-              -- perl kafsssearchserver.fcgi --numthreads=5
+   spawn-fcgi -s /var/run/kafsss.sock \
+              -- plackup -s FCGI kafsssearchserver.psgi
    ```
 
-3. **API経由での検索:**
+3. **またはNGINXでのデプロイ（リバースプロキシ）:**
+   ```bash
+   perl kafsssearchserver.psgi --listenport=5000 --numthreads=10
+   ```
+
+4. **API経由での検索:**
    ```bash
    curl -X POST http://your-domain.com/api/search \
         -H "Content-Type: application/json" \

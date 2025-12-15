@@ -187,9 +187,7 @@ The typical kafsss workflow is as follows:
 - `kafsssearchclient` - Remote API client with asynchronous job management
 
 ### Server Components
-- `kafsssearchserver.pl` - Standalone HTTP server
-- `kafsssearchserver.fcgi` - FastCGI server implementation
-- `kafsssearchserver.psgi` - PSGI/Plack server implementation
+- `kafsssearchserver.psgi` - PSGI/Plack server (supports standalone, FastCGI, and various deployment options)
 
 ### Architecture
 - **Database Layer**: PostgreSQL with pg_kmersearch extension for k-mer indexing
@@ -209,8 +207,8 @@ sudo make install
 make PREFIX=/opt/kafsss
 sudo make install PREFIX=/opt/kafsss
 
-# Note: Server scripts (kafsssearchserver.pl, .fcgi, .psgi) are not installed by make
-# They should be manually deployed to appropriate web server locations
+# Install server script to specific directory
+make installserver DESTDIR=/var/www/kafsss
 ```
 
 ### Database Setup (Required)
@@ -253,13 +251,11 @@ perl check_dependencies.pl
 # Install missing dependencies on Ubuntu/Debian
 sudo apt-get install libdbi-perl libdbd-pg-perl libdbd-sqlite3-perl \
                      libjson-perl libwww-perl liburi-perl \
-                     libhttp-server-simple-perl libcgi-fast-perl \
-                     libfcgi-procmanager-perl libplack-perl starman
+                     libplack-perl starman
 
 # Install via CPAN
 cpanm DBI DBD::Pg DBD::SQLite JSON LWP::UserAgent HTTP::Request::Common \
-      URI HTTP::Server::Simple::CGI CGI::Fast FCGI::ProcManager \
-      Plack::Request Plack::Response Plack::Builder Plack::Handler::Starman
+      URI Plack::Request Plack::Response Plack::Builder Plack::Handler::Starman
 ```
 
 ### Testing the Tools
@@ -273,8 +269,8 @@ kafssindex --mode=create testdb
 kafsssearch --db=testdb sampledata.fasta results.tsv
 
 # Test server functionality (asynchronous job processing)
-perl kafsssearchserver.pl --listen-port=8080 &
-kafsssearchclient --server=localhost --db=testdb sampledata.fasta results.tsv
+perl kafsssearchserver.psgi --listenport=8080 &
+kafsssearchclient --server=localhost:8080 --db=testdb sampledata.fasta results.tsv
 
 # Test multi-server load balancing
 kafsssearchclient --server="server1,server2,server3" --db=testdb sampledata.fasta results.tsv
@@ -306,8 +302,8 @@ grep -n "pg_kmersearch" *.pl
 - Default values defined in each script's header section
 - PostgreSQL must have pg_kmersearch extension installed
 
-### Server Configuration  
-- Default ports: 8080 (HTTP), various for FastCGI/PSGI
+### Server Configuration
+- Default port: 5000 (PSGI/Starman)
 - SQLite job database: `./kafsssearchserver.sqlite`
 - Configurable limits: max jobs, timeouts, result retention
 - API endpoints: `/search`, `/result`, `/status`, `/cancel`, `/metadata` (GET)

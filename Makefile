@@ -3,7 +3,7 @@ BINDIR ?= $(PREFIX)/bin
 PERL ?= $(filter /%,$(shell /bin/sh -c 'type perl'))
 VERSION := 0.1.2025.12.13
 PROGRAM := kafssdbinfo kafssdedup kafssfreq kafssindex kafsspart kafsspreload kafsssubset kafsssearch kafsssearchclient kafssstore
-SERVER := kafsssearchserver.pl kafsssearchserver.fcgi kafsssearchserver.psgi
+SERVER := kafsssearchserver.psgi
 
 all: $(PROGRAM) version-server
 
@@ -22,8 +22,16 @@ install: $(PROGRAM)
 	mkdir -p $(PREFIX)/share/kafsss
 	mkdir -p $(PREFIX)/share/kafsss/lib/perl5
 
+installserver: version-server
+ifndef DESTDIR
+	$(error DESTDIR is not set. Usage: make installserver DESTDIR=/path/to/install)
+endif
+	mkdir -p $(DESTDIR)
+	cp $(SERVER) $(DESTDIR)
+	chmod 755 $(DESTDIR)/$(SERVER)
+
 clean:
 	rm -f $(PROGRAM)
 	perl -i -npe 's/$(VERSION)/__VERSION__/g' $(SERVER)
 
-.PHONY: all install clean version-server
+.PHONY: all install installserver clean version-server

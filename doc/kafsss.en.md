@@ -33,27 +33,6 @@ Core modules (above) plus:
 - `Time::HiRes` - High-resolution time functions
 - `Fcntl` - File control operations
 
-#### Standalone HTTP Server (kafsssearchserver.pl)
-Core modules plus:
-- `JSON` - JSON format processing
-- `HTTP::Server::Simple::CGI` - Standalone web server
-- `MIME::Base64` - Base64 encoding/decoding
-- `Time::HiRes` - High-resolution time functions
-- `Fcntl` - File control operations
-- `DBD::SQLite` - SQLite driver (for job management)
-- `Crypt::OpenSSL::Random` - Cryptographically secure random numbers
-
-#### FastCGI Server (kafsssearchserver.fcgi)
-Core modules plus:
-- `JSON` - JSON format processing
-- `CGI::Fast` - FastCGI implementation
-- `FCGI::ProcManager` - FastCGI process management
-- `MIME::Base64` - Base64 encoding/decoding
-- `Time::HiRes` - High-resolution time functions
-- `Fcntl` - File control operations
-- `DBD::SQLite` - SQLite driver (for job management)
-- `Crypt::OpenSSL::Random` - Cryptographically secure random numbers
-
 #### PSGI Server (kafsssearchserver.psgi)
 Core modules plus:
 - `JSON` - JSON format processing
@@ -157,54 +136,6 @@ sudo cpanm DBI DBD::Pg JSON LWP::UserAgent HTTP::Request::Common URI \
            MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
 ```
 
-#### For Standalone HTTP Server (kafsssearchserver.pl)
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install -y \
-    perl libdbi-perl libdbd-pg-perl libjson-perl \
-    libhttp-server-simple-perl libdbd-sqlite3-perl \
-    libcrypt-openssl-random-perl
-
-# Using cpanminus
-sudo cpanm DBI DBD::Pg JSON HTTP::Server::Simple::CGI \
-           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
-```
-
-**RHEL/CentOS/Fedora:**
-```bash
-sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON \
-                    perl-HTTP-Server-Simple perl-DBD-SQLite
-# or use dnf
-
-# Using cpanminus
-sudo cpanm DBI DBD::Pg JSON HTTP::Server::Simple::CGI \
-           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
-```
-
-#### For FastCGI Server (kafsssearchserver.fcgi)
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install -y \
-    perl libdbi-perl libdbd-pg-perl libjson-perl \
-    libcgi-fast-perl libfcgi-procmanager-perl \
-    libdbd-sqlite3-perl libcrypt-openssl-random-perl
-
-# Using cpanminus
-sudo cpanm DBI DBD::Pg JSON CGI::Fast FCGI::ProcManager \
-           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
-```
-
-**RHEL/CentOS/Fedora:**
-```bash
-sudo yum install -y perl perl-DBI perl-DBD-Pg perl-JSON \
-                    perl-CGI-Fast perl-FCGI-ProcManager perl-DBD-SQLite
-# or use dnf
-
-# Using cpanminus
-sudo cpanm DBI DBD::Pg JSON CGI::Fast FCGI::ProcManager \
-           MIME::Base64 Time::HiRes Fcntl DBD::SQLite Crypt::OpenSSL::Random
-```
-
 #### For PSGI Server (kafsssearchserver.psgi)
 **Ubuntu/Debian:**
 ```bash
@@ -243,16 +174,6 @@ perl -MCPAN -e 'install DBI, DBD::Pg, Getopt::Long, POSIX, File::Basename, Sys::
 perl -MCPAN -e 'install DBI, DBD::Pg, JSON, LWP::UserAgent, HTTP::Request::Common, URI, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
 ```
 
-**For Standalone HTTP Server (kafsssearchserver.pl):**
-```bash
-perl -MCPAN -e 'install DBI, DBD::Pg, JSON, HTTP::Server::Simple::CGI, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
-```
-
-**For FastCGI Server (kafsssearchserver.fcgi):**
-```bash
-perl -MCPAN -e 'install DBI, DBD::Pg, JSON, CGI::Fast, FCGI::ProcManager, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
-```
-
 **For PSGI Server (kafsssearchserver.psgi):**
 ```bash
 perl -MCPAN -e 'install DBI, DBD::Pg, JSON, Plack::Request, Plack::Response, Plack::Builder, Plack::Handler::Starman, MIME::Base64, Time::HiRes, Fcntl, DBD::SQLite, Crypt::OpenSSL::Random'
@@ -284,7 +205,6 @@ perl -MLWP::UserAgent -e 'print "LWP::UserAgent available\n"'
 perl -MURI -e 'print "URI available\n"'
 
 # Verify server modules
-perl -MHTTP::Server::Simple -e 'print "HTTP::Server::Simple available\n"'
 perl -MPlack -e 'print "Plack available\n"'
 perl -MStarman -e 'print "Starman available\n"'
 ```
@@ -302,9 +222,7 @@ perl -MStarman -e 'print "Starman available\n"'
 | `kafsspart` | Partition kafsss_data table for improved performance |
 | `kafssfreq` | K-mer frequency analysis |
 | `kafsssearchclient` | Remote k-mer search client with load balancing |
-| `kafsssearchserver.pl` | REST API server for k-mer search (standalone) with asynchronous job processing |
-| `kafsssearchserver.fcgi` | FastCGI version for production web servers |
-| `kafsssearchserver.psgi` | PSGI version for modern web deployment |
+| `kafsssearchserver.psgi` | PSGI server for k-mer search (supports standalone, FastCGI, and various deployment options) |
 | `calcsegment` | Mathematical utility for sequence segmentation parameter calculation |
 
 ## Installation
@@ -322,7 +240,10 @@ perl -MStarman -e 'print "Starman available\n"'
    sudo make install PREFIX=/opt/kafsss
    ```
 
-**Note**: Server scripts (`kafsssearchserver.pl`, `.fcgi`, `.psgi`) are not installed by make and should be manually deployed to appropriate web server locations.
+**Note**: Server script is installed separately using the `installserver` target:
+```bash
+make installserver DESTDIR=/var/www/kafsss
+```
 
 ### Manual Installation
 
@@ -798,18 +719,27 @@ kafsssearchclient --resume=20250703T120000-AbCdEf123456     # Resume job
 kafsssearchclient --cancel=20250703T120000-AbCdEf123456     # Cancel job
 ```
 
-### kafsssearchserver.pl
+### kafsssearchserver.psgi
 
-REST API server for k-mer search (standalone HTTP server).
+PSGI server for k-mer search with asynchronous job processing. Supports standalone, FastCGI, and various deployment configurations.
 
 #### Usage
 ```bash
-perl kafsssearchserver.pl [options]
+perl kafsssearchserver.psgi [options]
 ```
 
 #### Options
-- `--listen-port=PORT` - HTTP server listen port (default: 8080)
-- `--numthreads=INT` - Number of parallel request processing threads (default: 5)
+- `--host=HOST` - PostgreSQL server host (default: $PGHOST or localhost)
+- `--port=PORT` - PostgreSQL server port (default: $PGPORT or 5432)
+- `--username=USER` - PostgreSQL username (default: $PGUSER or current user)
+- `--listenport=PORT` - HTTP server listen port (default: 5000)
+- `--numthreads=NUM` - Number of worker processes (default: 5)
+- `--sqlitepath=PATH` - SQLite database file path (default: ./kafsssearchserver.sqlite)
+- `--cleanlimit=INT` - Result retention period in seconds (default: 86400)
+- `--jobtimeout=INT` - Job timeout in seconds (default: 1800)
+- `--maxnjob=INT` - Maximum concurrent jobs (default: 10)
+- `--cleaninterval=INT` - Cleanup interval in seconds (default: 300)
+- `--help, -h` - Show help message
 
 #### Configuration
 Edit default values in the script header:
@@ -985,16 +915,69 @@ Response JSON:
 
 Note: `default_kmersize`, `default_occurbitlen`, `default_maxpappear`, `default_maxnappear`, `default_precludehighfreqkmer`, and `default_subset` are only included if configured.
 
+#### Deployment Options
+```bash
+# Standalone (built-in Starman server)
+perl kafsssearchserver.psgi
+
+# With plackup (HTTP)
+plackup -p 5000 --workers 10 kafsssearchserver.psgi
+
+# With plackup (FastCGI via Unix socket)
+plackup -s FCGI --listen /var/run/kafsss.sock --nproc 10 kafsssearchserver.psgi
+
+# With plackup (FastCGI via TCP port)
+plackup -s FCGI --listen :9000 --nproc 10 kafsssearchserver.psgi
+
+# With spawn-fcgi (FastCGI)
+spawn-fcgi -s /var/run/kafsss.sock -n -- plackup -s FCGI kafsssearchserver.psgi
+
+# With other PSGI servers
+starman --port 5000 --workers 10 kafsssearchserver.psgi
+uwsgi --http :5000 --psgi kafsssearchserver.psgi
+```
+
+#### NGINX Setup (FastCGI)
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location /api/ {
+        include fastcgi_params;
+        fastcgi_pass unix:/var/run/kafsss.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    }
+}
+```
+
+#### NGINX Setup (Reverse Proxy)
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
 #### Examples
 ```bash
-# Start server
-perl kafsssearchserver.pl --listen-port=8080
+# Start standalone server
+perl kafsssearchserver.psgi
 
-# Start server with custom thread count
-perl kafsssearchserver.pl --listen-port=8080 --numthreads=10
+# Start with custom port and threads
+perl kafsssearchserver.psgi --listenport=8080 --numthreads=10
+
+# Start with plackup
+plackup -p 8080 --workers 20 kafsssearchserver.psgi
 
 # API call
-curl -X POST http://localhost:8080/search \
+curl -X POST http://localhost:5000/search \
   -H "Content-Type: application/json" \
   -d '{
     "querylabel": "test_sequence",
@@ -1003,99 +986,7 @@ curl -X POST http://localhost:8080/search \
   }'
 
 # Get server metadata
-curl http://localhost:8080/metadata
-```
-
-### kafsssearchserver.fcgi
-
-FastCGI version for production web servers (NGINX/Apache).
-
-#### Usage
-```bash
-perl kafsssearchserver.fcgi [options]
-```
-
-#### Options
-- `--numthreads=NUM` - Number of FastCGI processes (default: 5)
-
-#### Configuration
-Same as kafsssearchserver.pl - edit default values in script header.
-
-#### NGINX Setup
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
-    
-    location /api/search {
-        include fastcgi_params;
-        fastcgi_pass unix:/var/run/kafsssearch.sock;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-    }
-}
-```
-
-#### Apache Setup
-```apache
-<VirtualHost *:80>
-    ServerName your-domain.com
-    
-    ScriptAlias /api/search /path/to/kafsssearchserver.fcgi
-    
-    <Directory "/path/to/">
-        SetHandler fcgid-script
-        Options +ExecCGI
-        Require all granted
-    </Directory>
-</VirtualHost>
-```
-
-#### Process Management
-```bash
-# Start FastCGI processes
-spawn-fcgi -s /var/run/kafsssearch.sock -U nginx -G nginx \
-           -u www-data -g www-data -P /var/run/kafsssearch.pid \
-           -- perl kafsssearchserver.fcgi --numthreads=5
-```
-
-### kafsssearchserver.psgi
-
-PSGI version for modern web deployment with various PSGI servers.
-
-#### Usage
-```bash
-perl kafsssearchserver.psgi [options]
-```
-
-#### Options
-- `--host=HOST` - PostgreSQL server host (default: $PGHOST or localhost)
-- `--port=PORT` - PostgreSQL server port (default: $PGPORT or 5432)
-- `--username=USER` - PostgreSQL username (default: $PGUSER or current user)
-- `--listen-port=PORT` - HTTP server listen port (default: 5000)
-- `--workers=NUM` - Number of worker processes (default: 5)
-- `--help, -h` - Show help message
-
-#### Configuration
-Same as kafsssearchserver.pl - edit default values in script header.
-
-#### Deployment Options
-```bash
-# Standalone (built-in Starman server)
-perl kafsssearchserver.psgi
-
-# With plackup
-plackup -p 5000 --workers 10 kafsssearchserver.psgi
-
-# With other PSGI servers
-starman --port 5000 --workers 10 kafsssearchserver.psgi
-uwsgi --http :5000 --psgi kafsssearchserver.psgi
-```
-
-#### Examples
-```bash
-perl kafsssearchserver.psgi
-perl kafsssearchserver.psgi --listen-port=8080 --workers=10
-plackup -p 8080 --workers 20 kafsssearchserver.psgi
+curl http://localhost:5000/metadata
 ```
 
 ## Workflow Examples
@@ -1146,18 +1037,23 @@ plackup -p 8080 --workers 20 kafsssearchserver.psgi
 
 1. **Configure defaults:**
    ```perl
-   # Edit kafsssearchserver.fcgi
+   # Edit kafsssearchserver.psgi
    my $default_database = 'mydb';
    my $default_subset = 'bacteria';
    ```
 
-2. **Deploy with NGINX:**
+2. **Deploy with NGINX (FastCGI):**
    ```bash
-   spawn-fcgi -s /var/run/kafsssearch.sock \
-              -- perl kafsssearchserver.fcgi --numthreads=5
+   spawn-fcgi -s /var/run/kafsss.sock \
+              -- plackup -s FCGI kafsssearchserver.psgi
    ```
 
-3. **Search via API:**
+3. **Or deploy with NGINX (Reverse Proxy):**
+   ```bash
+   perl kafsssearchserver.psgi --listenport=5000 --numthreads=10
+   ```
+
+4. **Search via API:**
    ```bash
    curl -X POST http://your-domain.com/api/search \
         -H "Content-Type: application/json" \

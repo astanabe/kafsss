@@ -199,10 +199,19 @@ Environment variables:
 PSGI Deployment:
   # Standalone (built-in Starman server)
   perl kafsssearchserver.psgi
-  
-  # With plackup
+
+  # With plackup (HTTP)
   plackup -p 5000 --workers 10 kafsssearchserver.psgi
-  
+
+  # With plackup (FastCGI via Unix socket)
+  plackup -s FCGI --listen /var/run/kafsss.sock --nproc 10 kafsssearchserver.psgi
+
+  # With plackup (FastCGI via TCP port)
+  plackup -s FCGI --listen :9000 --nproc 10 kafsssearchserver.psgi
+
+  # With spawn-fcgi (FastCGI)
+  spawn-fcgi -s /var/run/kafsss.sock -n -- plackup -s FCGI kafsssearchserver.psgi
+
   # With other PSGI servers
   starman --port 5000 --workers 10 kafsssearchserver.psgi
   uwsgi --http :5000 --psgi kafsssearchserver.psgi

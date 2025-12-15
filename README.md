@@ -12,7 +12,7 @@ A comprehensive toolkit for DNA sequence analysis using k-mer similarity search 
 - **Load Balancing**: Multi-server support with failover, retry logic, and round-robin distribution
 - **Multiple Input Formats**: FASTA, compressed files (.gz, .bz2, .xz, .zst), BLAST databases, wildcard patterns
 - **Multiple Output Formats**: TSV, multi-file TSV, FASTA, BLASTDB (creates BLAST databases directly)
-- **Multiple Deployment Options**: Standalone HTTP, FastCGI, and PSGI servers with production-ready scaling
+- **Multiple Deployment Options**: PSGI server supporting standalone, FastCGI, and various deployment configurations
 - **Flexible Authentication**: Support for .netrc files and HTTP Basic authentication
 - **Advanced Job Management**: Resume, cancel, and monitor jobs with persistent storage
 
@@ -28,7 +28,10 @@ make PREFIX=/opt/kafsss
 sudo make install PREFIX=/opt/kafsss
 ```
 
-**Note**: Server scripts (`kafsssearchserver.pl`, `.fcgi`, `.psgi`) are not installed by make and should be manually deployed to appropriate web server locations.
+**Note**: Server script (`kafsssearchserver.psgi`) is installed separately:
+```bash
+make installserver DESTDIR=/var/www/kafsss
+```
 
 ## Quick Start
 
