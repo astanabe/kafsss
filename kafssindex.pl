@@ -496,7 +496,8 @@ sub create_parent_table_indexes {
     my $seq_index_name = generate_gin_index_name('kafsss_data', 'seq',
         $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow, $use_highfreq_cache);
     print "Creating parent index '$seq_index_name' with operator class '$op_class'...\n";
-    my $seq_sql = "CREATE INDEX IF NOT EXISTS $seq_index_name ON kafsss_data USING gin(seq $op_class)";
+    # Quote index name to preserve case (phkT/phkF)
+    my $seq_sql = "CREATE INDEX IF NOT EXISTS \"$seq_index_name\" ON kafsss_data USING gin(seq $op_class)";
     if ($tablespace) {
         $seq_sql .= " TABLESPACE \"$tablespace\"";
     }
@@ -1299,15 +1300,19 @@ sub create_single_partition_index {
 
     # Create index on partition with proper error handling
     my $index_name;
+    my $quoted_index_name;
     if ($column->{name} eq 'seq') {
         # Use new naming convention for seq column
         $index_name = generate_gin_index_name($partition_name, 'seq',
             $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow, $use_highfreq_cache);
+        # Quote index name to preserve case (phkT/phkF)
+        $quoted_index_name = "\"$index_name\"";
     } else {
         # Use simple naming for subset and seqid columns
         $index_name = "idx_${partition_name}_$column->{name}_gin";
+        $quoted_index_name = $index_name;
     }
-    my $index_sql = "CREATE INDEX IF NOT EXISTS $index_name ON $partition_name USING gin($column->{name}";
+    my $index_sql = "CREATE INDEX IF NOT EXISTS $quoted_index_name ON $partition_name USING gin($column->{name}";
     
     # Add operator class for seq column
     if ($column->{op_class}) {
