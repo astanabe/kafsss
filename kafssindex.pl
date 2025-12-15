@@ -443,13 +443,6 @@ SQL
     # Do not free cache - PostgreSQL will handle it automatically on disconnect
     # This prevents interfering with other processes that may be using the cache
 
-    # Generate the seq index name for metadata storage
-    my $seq_index_name = generate_gin_index_name('kafsss_data', 'seq',
-        $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow, $use_highfreq_cache);
-
-    # Update kafsss_meta table
-    update_meta_table($dbh, $use_highfreq_cache, $seq_index_name);
-    
     print "All indexes created successfully.\n";
 }
 
@@ -546,10 +539,7 @@ sub drop_indexes {
             print STDERR "Warning: Failed to drop index '$index_name': $@\n";
         }
     }
-    
-    # Clear kafsss_meta table
-    clear_meta_table($dbh);
-    
+
     print "Index dropping completed.\n";
 }
 
@@ -861,65 +851,6 @@ sub undo_highfreq_analysis {
     
     if ($@) {
         die "Failed to undo high-frequency k-mer analysis: $@\n";
-    }
-}
-
-
-
-sub update_meta_table {
-    my ($dbh, $preclude_highfreq_kmer, $seq_index_name) = @_;
-
-    print "Updating kafsss_meta table...\n";
-
-    # Check if kafsss_meta table has rows, insert if empty
-    eval {
-        my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM kafsss_meta");
-        if ($count == 0) {
-            $dbh->do("INSERT INTO kafsss_meta DEFAULT VALUES");
-        }
-    };
-    if ($@) {
-        die "Failed to check kafsss_meta table: $@\n";
-    }
-
-    # Use do() method which works correctly after reconnection
-    eval {
-        my $phk_value = $preclude_highfreq_kmer ? 'true' : 'false';
-        my $sql = sprintf(
-            "UPDATE kafsss_meta SET kmer_size = %d, max_appearance_rate = %f, max_appearance_nrow = %d, occur_bitlen = %d, preclude_highfreq_kmer = %s, seq_index_name = '%s'",
-            $kmer_size, $max_appearance_rate, $max_appearance_nrow, $occur_bitlen, $phk_value, $seq_index_name
-        );
-        $dbh->do($sql);
-        print "Metadata updated: kmer_size=$kmer_size, max_appearance_rate=$max_appearance_rate, max_appearance_nrow=$max_appearance_nrow, occur_bitlen=$occur_bitlen, preclude_highfreq_kmer=$phk_value, seq_index_name=$seq_index_name\n";
-    };
-
-    if ($@) {
-        die "Failed to update kafsss_meta table: $@\n";
-    }
-}
-
-sub clear_meta_table {
-    my ($dbh) = @_;
-
-    print "Clearing kafsss_meta table...\n";
-
-    eval {
-        my $update_sth = $dbh->prepare(<<SQL);
-UPDATE kafsss_meta SET
-    kmer_size = NULL,
-    max_appearance_rate = NULL,
-    max_appearance_nrow = NULL,
-    occur_bitlen = NULL,
-    preclude_highfreq_kmer = NULL,
-    seq_index_name = NULL
-SQL
-        $update_sth->execute();
-        $update_sth->finish();
-        print "Metadata cleared from kafsss_meta table.\n";
-    };
-
-    if ($@) {
-        print STDERR "Warning: Failed to clear kafsss_meta table: $@\n";
     }
 }
 

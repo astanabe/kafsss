@@ -102,10 +102,10 @@ unless ($table_count > 0) {
     exit 1;
 }
 
-# Get metadata from kafsss_meta table (including kmer-related columns)
-$sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow, preclude_highfreq_kmer, seq_index_name FROM kafsss_meta LIMIT 1");
+# Get metadata from kafsss_meta table
+$sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, subset FROM kafsss_meta LIMIT 1");
 $sth->execute();
-my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $subset_json, $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow, $preclude_highfreq_kmer, $seq_index_name) = $sth->fetchrow_array();
+my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $subset_json) = $sth->fetchrow_array();
 $sth->finish();
 
 # Get sequence data type information
@@ -184,24 +184,6 @@ print STDERR "Min split length: $minsplitlen\n";
 print STDERR "Overlap length: $ovllen\n";
 print STDERR "Total sequences: $nseq\n";
 print STDERR "Total characters: $nchar\n";
-
-# Display K-mer index configuration if available
-if (defined $kmer_size) {
-    print STDERR "\n=== K-mer Index Configuration ===\n";
-    print STDERR "K-mer size: $kmer_size\n";
-    print STDERR "Occurrence bit length: $occur_bitlen\n";
-    print STDERR "Max appearance rate: $max_appearance_rate\n";
-    print STDERR "Max appearance nrow: $max_appearance_nrow\n";
-    if (defined $preclude_highfreq_kmer) {
-        print STDERR "High-freq k-mer excluded: " . ($preclude_highfreq_kmer ? 'yes' : 'no') . "\n";
-    }
-    if (defined $seq_index_name) {
-        print STDERR "Seq index name: $seq_index_name\n";
-    }
-} else {
-    print STDERR "\n=== K-mer Index Configuration ===\n";
-    print STDERR "K-mer index: Not configured\n";
-}
 
 # Display GIN index information
 print STDERR "\n=== GIN Index Information ===\n";

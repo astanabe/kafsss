@@ -59,16 +59,6 @@ idx_[tablename]_seq_gin_km{N}_ob{N}_mar{NNNN}_man{N}_phk{T/F}
 
 Example: `idx_kafsss_data_seq_gin_km8_ob8_mar0500_man0_phkT`
 
-### kafsss_meta Table Columns
-
-The `kafsss_meta` table may contain the following index-related columns (added by kafssindex):
-- `kmer_size`: K-mer size used for index
-- `occur_bitlen`: Occurrence bit length
-- `max_appearance_rate`: Maximum appearance rate threshold
-- `max_appearance_nrow`: Maximum appearance row count
-- `preclude_highfreq_kmer`: Whether high-frequency k-mers are excluded (boolean)
-- `seq_index_name`: Name of the GIN index created on seq column
-
 ### Multiple GIN Index Support
 
 A single database can have multiple GIN indexes with different parameters. When searching:

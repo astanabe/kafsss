@@ -1144,32 +1144,6 @@ sub parse_pg_array {
     return @elements;
 }
 
-sub get_metadata_from_meta {
-    my ($dbh) = @_;
-    
-    my $sth = $dbh->prepare(<<SQL);
-SELECT ovllen, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
-FROM kafsss_meta LIMIT 1
-SQL
-    
-    $sth->execute();
-    my ($ovllen, $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow) = $sth->fetchrow_array();
-    $sth->finish();
-    
-    if (!defined $ovllen || !defined $kmer_size) {
-        die "No metadata found in kafsss_meta table. Please run kafssindex to create indexes first.\n";
-    }
-    
-    return {
-        ovllen => $ovllen,
-        kmer_size => $kmer_size,
-        occur_bitlen => $occur_bitlen,
-        max_appearance_rate => $max_appearance_rate,
-        max_appearance_nrow => $max_appearance_nrow,
-        use_highfreq_cache => 0  # Will be updated by check_highfreq_kmer_exists
-    };
-}
-
 sub check_highfreq_kmer_exists {
     my ($dbh, $metadata) = @_;
     
@@ -1240,31 +1214,6 @@ sub get_ovllen_from_meta {
     }
     
     return $ovllen;
-}
-
-sub get_kmer_size_from_meta {
-    my ($dbh) = @_;
-    
-    # Query kafsss_meta table to get kmer_size value
-    my $sth = $dbh->prepare("SELECT kmer_size FROM kafsss_meta LIMIT 1");
-    my $kmer_size;
-    eval {
-        $sth->execute();
-        ($kmer_size) = $sth->fetchrow_array();
-        $sth->finish();
-        
-        if (defined $kmer_size) {
-            return $kmer_size;
-        } else {
-            die "No k-mer index found. Please run kafssindex to create indexes first.\n";
-        }
-    };
-    
-    if ($@) {
-        die "Failed to retrieve kmer_size from kafsss_meta table: $@\n";
-    }
-    
-    return $kmer_size;
 }
 
 sub validate_query_sequence {

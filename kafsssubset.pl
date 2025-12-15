@@ -548,46 +548,22 @@ SQL
 
 sub check_meta_table_compatibility {
     my ($dbh) = @_;
-    
+
     print "Checking kafsss_meta table compatibility...\n";
-    
+
     # Check if kafsss_meta table exists
     my $sth = $dbh->prepare(<<SQL);
 SELECT COUNT(*)
-FROM information_schema.tables 
+FROM information_schema.tables
 WHERE table_name = 'kafsss_meta'
 SQL
     $sth->execute();
     my ($meta_table_count) = $sth->fetchrow_array();
     $sth->finish();
-    
-    die "Table 'kafsss_meta' does not exist in database '$database_name'\n" 
+
+    die "Table 'kafsss_meta' does not exist in database '$database_name'\n"
         unless $meta_table_count > 0;
-    
-    # Check if new columns exist (added by updated kafssstore)
-    $sth = $dbh->prepare(<<SQL);
-SELECT column_name
-FROM information_schema.columns 
-WHERE table_name = 'kafsss_meta'
-AND column_name IN ('kmer_size', 'occur_bitlen', 'max_appearance_rate', 'max_appearance_nrow')
-ORDER BY column_name
-SQL
-    $sth->execute();
-    
-    my @new_columns = ();
-    while (my ($col) = $sth->fetchrow_array()) {
-        push @new_columns, $col;
-    }
-    $sth->finish();
-    
-    if (@new_columns > 0) {
-        print "Found new meta columns: " . join(', ', @new_columns) . "\n";
-        print "Database appears to be updated for new pg_kmersearch specification.\n";
-    } else {
-        print "Warning: New meta columns not found. Database may be from older version.\n";
-        print "Consider updating with latest kafssstore\n";
-    }
-    
+
     print "Meta table compatibility check completed.\n";
 }
 

@@ -1759,38 +1759,6 @@ sub set_kmersearch_guc_variables_from_request {
     }
 }
 
-sub get_metadata_from_meta {
-    my ($dbh) = @_;
-
-    # Query kafsss_meta table to get all metadata
-    my $sth = $dbh->prepare(<<SQL);
-SELECT ovllen, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow
-FROM kafsss_meta LIMIT 1
-SQL
-    
-    eval {
-        $sth->execute();
-        my ($ovllen, $kmer_size, $occur_bitlen, $max_appearance_rate, $max_appearance_nrow) = $sth->fetchrow_array();
-        $sth->finish();
-        
-        if (!defined $ovllen || !defined $kmer_size) {
-            die "No metadata found in kafsss_meta table. Please run kafssindex to create indexes first.\n";
-        }
-        
-        return {
-            ovllen => $ovllen,
-            kmer_size => $kmer_size,
-            occur_bitlen => $occur_bitlen,
-            max_appearance_rate => $max_appearance_rate,
-            max_appearance_nrow => $max_appearance_nrow
-        };
-    };
-    
-    if ($@) {
-        die "Failed to retrieve metadata from kafsss_meta table: $@\n";
-    }
-}
-
 sub check_highfreq_kmer_exists {
     my ($dbh, $metadata) = @_;
     
@@ -2003,54 +1971,6 @@ sub parse_pg_array {
     push @elements, $current_element if $current_element ne '' || @elements > 0;
     
     return @elements;
-}
-
-sub get_database_metadata {
-    my ($database_name) = @_;
-    
-    # Connect to PostgreSQL database
-    my $password = $default_password;
-    my $dsn = "DBI:Pg:dbname=$database_name;host=$host;port=$port";
-        
-    my $dbh = DBI->connect($dsn, $username, $password, {
-        AutoCommit => 1,
-        PrintError => 0,
-        RaiseError => 1,
-        ShowErrorStatement => 1,
-        AutoInactiveDestroy => 1,
-        pg_enable_utf8 => 1
-    }) or die "Cannot connect to database '$database_name': $DBI::errstr";
-    
-    # Get metadata from kafsss_meta table
-    my $sth = $dbh->prepare("SELECT ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size FROM kafsss_meta LIMIT 1");
-    $sth->execute();
-    my ($ver, $minlen, $minsplitlen, $ovllen, $nseq, $nchar, $subset_json, $kmer_size) = $sth->fetchrow_array();
-    $sth->finish();
-    
-    $dbh->disconnect();
-    
-    # Parse subset JSON
-    my $subset_data = {};
-    if ($subset_json) {
-        eval {
-            $subset_data = decode_json($subset_json);
-        };
-        if ($@) {
-            warn "Warning: Failed to parse subset JSON: $@";
-            $subset_data = {};
-        }
-    }
-    
-    return {
-        ver => $ver,
-        minlen => int($minlen || 0),
-        minsplitlen => int($minsplitlen || 0),
-        ovllen => int($ovllen || 0),
-        nseq => int($nseq || 0),
-        nchar => int($nchar || 0),
-        subset => $subset_data,
-        kmer_size => int($kmer_size || 0)
-    };
 }
 
 sub validate_user_and_permissions {

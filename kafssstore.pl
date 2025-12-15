@@ -710,13 +710,7 @@ CREATE TABLE IF NOT EXISTS kafsss_meta (
     ovllen SMALLINT NOT NULL,
     nseq BIGINT,
     nchar BIGINT,
-    subset JSONB,
-    kmer_size INTEGER,
-    occur_bitlen INTEGER,
-    max_appearance_rate REAL,
-    max_appearance_nrow INTEGER,
-    preclude_highfreq_kmer BOOLEAN,
-    seq_index_name TEXT
+    subset JSONB
 )
 SQL
     
@@ -725,8 +719,8 @@ SQL
     $sth->execute();
     $sth->finish();
     
-    $sth = $dbh->prepare("INSERT INTO kafsss_meta (ver, minlen, minsplitlen, ovllen, nseq, nchar, subset, kmer_size, occur_bitlen, max_appearance_rate, max_appearance_nrow, preclude_highfreq_kmer, seq_index_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-    $sth->execute($VERSION, $minlen, $minsplitlen, $ovllen, 0, 0, '{}', undef, undef, undef, undef, undef, undef);
+    $sth = $dbh->prepare("INSERT INTO kafsss_meta (ver, minlen, minsplitlen, ovllen, nseq, nchar, subset) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    $sth->execute($VERSION, $minlen, $minsplitlen, $ovllen, 0, 0, '{}');
     $sth->finish();
     
     # Create main table (simple structure - hash functions handle efficiency)
