@@ -48,8 +48,8 @@ if (@ARGV != 1) {
 my $database_name = $ARGV[0];
 
 # Validate npart
-if ($npart < 2) {
-    die "Error: --npart must be 2 or greater\n";
+if ($npart < 1) {
+    die "Error: --npart must be 1 or greater\n";
 }
 
 # Connect to PostgreSQL database
@@ -77,10 +77,7 @@ if (!$table_exists) {
 # Check if table is already partitioned
 my $check_partition_sql = "SELECT relkind FROM pg_class WHERE relname = 'kafsss_data'";
 my $relkind = $dbh->selectrow_array($check_partition_sql);
-
-if ($relkind eq 'p') {
-    die "Error: Table 'kafsss_data' is already partitioned\n";
-}
+my $is_partitioned = ($relkind eq 'p');
 
 # Check if GIN indexes exist on seq column of kafsss_data table
 my $check_gin_index_sql = "
@@ -96,54 +93,90 @@ my $check_gin_index_sql = "
 ";
 my $gin_index_name = $dbh->selectrow_array($check_gin_index_sql);
 
-if ($gin_index_name) {
-    die "Error: GIN index '$gin_index_name' exists on kafsss_data.seq column.\n" .
-        "Partitioning cannot proceed with existing GIN indexes.\n" .
-        "Please remove GIN indexes first using:\n" .
-        "  kafssindex --mode=drop $database_name\n" .
-        "After partitioning, recreate indexes with:\n" .
-        "  kafssindex --mode=create $database_name\n";
+# Handle --npart=1 (unpartitioning)
+if ($npart == 1) {
+    if (!$is_partitioned) {
+        die "Error: Table 'kafsss_data' is not partitioned.\n" .
+            "--npart=1 can only be used to convert a partitioned table back to a regular table.\n";
+    }
+
+    if ($gin_index_name) {
+        die "Error: GIN index '$gin_index_name' exists on kafsss_data.seq column.\n" .
+            "Unpartitioning cannot proceed with existing GIN indexes.\n" .
+            "Please remove GIN indexes first using:\n" .
+            "  kafssindex --mode=drop $database_name\n" .
+            "After unpartitioning, recreate indexes with:\n" .
+            "  kafssindex --mode=create $database_name\n";
+    }
+} else {
+    # Handle --npart>=2 (partitioning)
+    if ($is_partitioned) {
+        die "Error: Table 'kafsss_data' is already partitioned\n";
+    }
+
+    if ($gin_index_name) {
+        die "Error: GIN index '$gin_index_name' exists on kafsss_data.seq column.\n" .
+            "Partitioning cannot proceed with existing GIN indexes.\n" .
+            "Please remove GIN indexes first using:\n" .
+            "  kafssindex --mode=drop $database_name\n" .
+            "After partitioning, recreate indexes with:\n" .
+            "  kafssindex --mode=create $database_name\n";
+    }
 }
 
 # Prepare tablespace parameter (NULL if not specified)
 my $tablespace_param = $tablespace ? "'$tablespace'" : 'NULL';
 
-# Execute partitioning
+# Execute partitioning or unpartitioning
 eval {
-    print "Partitioning kafsss_data table into $npart partitions...\n" if $verbose;
-    
-    # Call kmersearch_partition_table function
-    my $partition_sql = "SELECT kmersearch_partition_table('kafsss_data', $npart, $tablespace_param)";
-    
-    $dbh->do($partition_sql);
-    
-    print "Successfully partitioned kafsss_data table into $npart partitions\n";
-    
-    # Show partition information if verbose
-    if ($verbose) {
-        my $partition_info_sql = "
-            SELECT 
-                schemaname,
-                tablename,
-                pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size
-            FROM pg_tables 
-            WHERE tablename LIKE 'kafsss_data_%'
-            ORDER BY tablename
-        ";
-        
-        my $sth = $dbh->prepare($partition_info_sql);
-        $sth->execute();
-        
-        print "\nPartition Information:\n";
-        print "-" x 50 . "\n";
-        while (my $row = $sth->fetchrow_hashref) {
-            printf "  %-30s %10s\n", $row->{tablename}, $row->{size};
+    if ($npart == 1) {
+        # Unpartition the table
+        print "Unpartitioning kafsss_data table to regular table...\n" if $verbose;
+
+        # Call kmersearch_unpartition_table function
+        my $unpartition_sql = "SELECT kmersearch_unpartition_table('kafsss_data', $tablespace_param)";
+
+        $dbh->do($unpartition_sql);
+
+        print "Successfully converted kafsss_data table from partitioned to regular table\n";
+    } else {
+        # Partition the table
+        print "Partitioning kafsss_data table into $npart partitions...\n" if $verbose;
+
+        # Call kmersearch_partition_table function
+        my $partition_sql = "SELECT kmersearch_partition_table('kafsss_data', $npart, $tablespace_param)";
+
+        $dbh->do($partition_sql);
+
+        print "Successfully partitioned kafsss_data table into $npart partitions\n";
+
+        # Show partition information if verbose
+        if ($verbose) {
+            my $partition_info_sql = "
+                SELECT
+                    schemaname,
+                    tablename,
+                    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size
+                FROM pg_tables
+                WHERE tablename LIKE 'kafsss_data_%'
+                ORDER BY tablename
+            ";
+
+            my $sth = $dbh->prepare($partition_info_sql);
+            $sth->execute();
+
+            print "\nPartition Information:\n";
+            print "-" x 50 . "\n";
+            while (my $row = $sth->fetchrow_hashref) {
+                printf "  %-30s %10s\n", $row->{tablename}, $row->{size};
+            }
         }
     }
 };
 
 if ($@) {
-    die "Failed to partition table: $@\n";
+    my $operation = ($npart == 1) ? "unpartition" : "partition";
+    die "Failed to $operation table: $@\n";
 }
 
 # Disconnect from database
@@ -158,20 +191,22 @@ kafsspart version $VERSION
 
 Usage: kafsspart [options] database_name
 
-This tool partitions the kafsss_data table using pg_kmersearch's 
-kmersearch_partition_table function for improved performance.
+This tool partitions or unpartitions the kafsss_data table using pg_kmersearch's
+partitioning functions for improved performance.
 
 Required arguments:
   database_name         Name of the PostgreSQL database containing kafsss_data table
 
 Required options:
-  --npart=INT          Number of partitions (must be 2 or greater)
+  --npart=INT          Number of partitions:
+                         - 1: Convert partitioned table back to regular table
+                         - 2 or greater: Partition the table into N partitions
 
 Optional arguments:
   --host=HOST          Database server host (default: $default_host)
   --port=PORT          Database server port (default: $default_port)
   --username=USER      Database user name (default: $default_user)
-  --tablespace=NAME    Tablespace name for partitions (optional)
+  --tablespace=NAME    Tablespace name for partitions/table (optional)
   --verbose, -v        Enable verbose output
   --help, -h           Show this help message
 
@@ -191,10 +226,14 @@ Examples:
   # Partition on remote server
   kafsspart --host=dbserver --port=5433 --npart=8 mydb
 
+  # Unpartition (convert back to regular table)
+  kafsspart --npart=1 mydb
+
 Notes:
   - The kafsss_data table must exist before running this command
-  - The table cannot be already partitioned
-  - Partitioning improves query performance for large datasets
+  - For partitioning (--npart >= 2): The table cannot be already partitioned
+  - For unpartitioning (--npart=1): The table must be already partitioned
+  - GIN indexes on seq column must be removed before partitioning/unpartitioning
   - The pg_kmersearch extension must be installed
 
 EOF
