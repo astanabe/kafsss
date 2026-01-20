@@ -329,12 +329,14 @@ kafssdedup --workingmemory=32GB mydb
 
 ### kafsspart
 
-**Purpose**: Partition kafsss_data table using pg_kmersearch's partition function for improved performance.
+**Purpose**: Partition or unpartition kafsss_data table using pg_kmersearch's partition function for improved performance.
 
 **Usage**: `kafsspart [options] database_name`
 
 **Required Options**:
-- `--npart=INT` - Number of partitions (must be 2 or greater)
+- `--npart=INT` - Number of partitions (1 or greater)
+  - `--npart=1`: Unpartition (convert partitioned table back to regular table)
+  - `--npart=2` or greater: Partition into specified number of partitions
 
 **Optional Arguments**:
 - `--host=HOST` - Database server host
@@ -351,7 +353,14 @@ kafsspart --npart=16 mydb
 
 # Partition with specific tablespace
 kafsspart --npart=32 --tablespace=fast_ssd mydb
+
+# Unpartition (convert back to regular table)
+kafsspart --npart=1 mydb
 ```
+
+**Notes**:
+- GIN indexes on seq column must be removed before partitioning/unpartitioning
+- After unpartitioning, recreate indexes with kafssindex
 
 ### kafssfreq
 
@@ -892,7 +901,7 @@ Response JSON:
 ```json
 {
   "success": true,
-  "server_version": "0.1.2025.12.13",
+  "server_version": "0.1.2026.01.18",
   "default_database": "mykmersearch",
   "default_subset": "bacteria",
   "default_maxnseq": 1000,

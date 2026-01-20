@@ -19,11 +19,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Fact-checking**: When uncertain about technical details, check the actual source code, documentation, or ask for clarification rather than guessing.
 - **Verify possibilities**: Never leave "possibilities" or "might be" statements unresolved. Always confirm and verify to reach definitive conclusions. Do not make decisions or leave issues unaddressed based on uncertain possibilities.
 - **Error recovery**: When mistakes are made, do not attempt to patch or cover up errors. Instead, restore the previous state from backups or git repository. Use `git checkout`, `git reset`, or restore from backup files rather than making additional changes to fix mistakes.
-- **Git commit restrictions**: 
+- **Git commit restrictions**:
   - **Never commit without explicit instruction** from the user
   - **Never use `git add -A` or `git add .`** especially when temporary files exist
   - **Always add files selectively** using specific file paths
   - **Check git status** before any add operation to understand what will be staged
+- **Version number management**:
+  - **Update VERSION in Makefile** when committing source code changes (`.pl`, `.psgi` files)
+  - Version format: `0.1.YYYY.MM.DD` (date of the last source code change)
+  - Do NOT update version for documentation-only changes
+  - The version is embedded in built executables and reported by `/metadata` API endpoint
 
 ## Project Overview
 
