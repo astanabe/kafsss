@@ -875,7 +875,10 @@ sub start_child_process {
             AutoInactiveDestroy => 1,
             pg_enable_utf8 => 1
         }) or die "Cannot connect to database in child process: $DBI::errstr\n";
-        
+
+        # Set application name for child process to be detected by update_meta_statistics
+        $child_dbh->do("SET application_name = 'kafssstore:$output_db:child'");
+
         eval {
             insert_fragment_batch(\@fragment_copy, $child_dbh);
         };
@@ -1251,10 +1254,10 @@ sub update_meta_statistics {
     }
 
     # Now we have the lock - check if we are the last process
-    # Match application_name pattern 'kafssstore:<dbname>' and same database
-    my $app_name_pattern = "kafssstore:$output_db";
+    # Match application_name pattern 'kafssstore:<dbname>' or 'kafssstore:<dbname>:child' and same database
+    my $app_name_pattern = "kafssstore:$output_db%";
     my ($other_count) = $dbh->selectrow_array(
-        "SELECT COUNT(*) FROM pg_stat_activity WHERE application_name = ? AND datname = current_database() AND pid != ?",
+        "SELECT COUNT(*) FROM pg_stat_activity WHERE application_name LIKE ? AND datname = current_database() AND pid != ?",
         undef, $app_name_pattern, $my_pid
     );
 

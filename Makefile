@@ -1,7 +1,7 @@
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 PERL ?= $(filter /%,$(shell /bin/sh -c 'type perl'))
-VERSION := 0.1.2026.01.30
+VERSION := 0.1.2026.02.02
 PROGRAM := kafssdbinfo kafssdedup kafssfreq kafssindex kafsspart kafsspreload kafsssubset kafsssearch kafsssearchclient kafssstore
 SERVER := kafsssearchserver.psgi
 
