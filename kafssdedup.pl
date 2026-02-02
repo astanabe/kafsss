@@ -591,13 +591,21 @@ SQL
     # Convert PostgreSQL storage codes to readable names
     my %storage_map = (
         'p' => 'PLAIN',
-        'e' => 'EXTERNAL', 
+        'e' => 'EXTERNAL',
         'x' => 'EXTENDED',
         'm' => 'MAIN'
     );
-    
+
+    # Convert PostgreSQL compression codes to full names for SET COMPRESSION
+    my %compression_map = (
+        'l' => 'lz4',
+        'p' => 'pglz'
+    );
+
     my $storage_name = $storage_map{$storage} || $storage;
-    my $compression_name = defined $compression ? $compression : 'none';
+    my $compression_name = (defined $compression && exists $compression_map{$compression})
+        ? $compression_map{$compression}
+        : 'none';
     
     print "Detected compression attributes: STORAGE=$storage_name";
     if ($compression_name ne 'none' && $storage_name eq 'EXTENDED') {
