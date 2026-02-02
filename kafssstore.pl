@@ -1271,19 +1271,9 @@ sub update_meta_statistics {
     # We are the last process - perform statistics update
     print "This is the last process. Performing statistics update.\n";
 
-    # Acquire table lock for statistics update
-    eval {
-        $dbh->begin_work;
-        $dbh->do("LOCK TABLE kafsss_data IN ACCESS EXCLUSIVE MODE");
-    };
-    if ($@) {
-        print STDERR "Failed to acquire table lock: $@\n";
-        eval { $dbh->rollback; };
-        $dbh->do("SELECT pg_advisory_unlock(?)", undef, $advisory_lock_key);
-        return;
-    }
-
-    print "Exclusive lock acquired. Calculating total sequence statistics...\n";
+    # No table lock needed - advisory lock ensures only one process updates statistics
+    # and MVCC provides consistent snapshot for COUNT/SUM queries
+    print "Calculating total sequence statistics...\n";
 
     # Calculate total number of sequences and total bases using accurate nuc_length() function
     my $sth = $dbh->prepare(<<SQL);
@@ -1341,13 +1331,11 @@ SQL
 
     eval {
         $sth->execute($nseq, $nchar, $subset_json);
-        $dbh->commit;
-        print "Transaction committed successfully for statistics update.\n";
+        print "Statistics update completed successfully.\n";
     };
 
     if ($@) {
         print STDERR "Error updating kafsss_meta statistics: $@\n";
-        eval { $dbh->rollback; };
         $sth->finish();
         # Release advisory lock before dying
         $dbh->do("SELECT pg_advisory_unlock(?)", undef, $advisory_lock_key);
