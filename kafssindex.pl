@@ -506,37 +506,71 @@ sub create_parent_table_indexes {
 
 sub drop_indexes {
     my ($dbh) = @_;
-    
+
     print "Dropping GIN indexes...\n";
-    
-    # Get existing indexes
-    my $existing_indexes = get_existing_indexes($dbh);
-    
-    # List of indexes to drop (for seq, subset, and seqid columns)
-    my @indexes_to_drop = ();
-    
-    # Find all indexes on seq, subset, and seqid columns
-    for my $index_name (keys %$existing_indexes) {
-        my $index_info = $existing_indexes->{$index_name};
-        if ($index_info->{columns} =~ /\b(seq|subset|seqid)\b/) {
-            push @indexes_to_drop, $index_name;
+
+    # Get parent table indexes
+    my $parent_indexes = get_existing_indexes($dbh, 'kafsss_data');
+
+    # Collect partition indexes if table is partitioned
+    my %partition_indexes = ();
+    my $is_partitioned = check_if_partitioned($dbh, 'kafsss_data');
+    if ($is_partitioned) {
+        my @partitions = get_partitions($dbh, 'kafsss_data');
+        if (@partitions > 0) {
+            print "Table 'kafsss_data' is partitioned with " . scalar(@partitions) . " partitions.\n";
+            for my $partition_name (@partitions) {
+                my $indexes = get_existing_indexes($dbh, $partition_name);
+                for my $index_name (keys %$indexes) {
+                    $partition_indexes{$index_name} = $indexes->{$index_name};
+                }
+            }
         }
     }
-    
-    if (@indexes_to_drop == 0) {
+
+    # Build lists of indexes to drop, filtering by relevant columns
+    my @parent_to_drop = ();
+    for my $index_name (keys %$parent_indexes) {
+        my $index_info = $parent_indexes->{$index_name};
+        if ($index_info->{columns} =~ /\b(seq|subset|seqid)\b/) {
+            push @parent_to_drop, $index_name;
+        }
+    }
+
+    my @partition_to_drop = ();
+    for my $index_name (keys %partition_indexes) {
+        my $index_info = $partition_indexes{$index_name};
+        if ($index_info->{columns} =~ /\b(seq|subset|seqid)\b/) {
+            push @partition_to_drop, $index_name;
+        }
+    }
+
+    if (@parent_to_drop == 0 && @partition_to_drop == 0) {
         print "No indexes found on 'seq', 'subset', or 'seqid' columns.\n";
         return;
     }
-    
-    # Drop each index
-    for my $index_name (@indexes_to_drop) {
-        print "Dropping index '$index_name'...\n";
+
+    # Drop parent indexes first (cascades to attached partition indexes)
+    for my $index_name (@parent_to_drop) {
+        print "Dropping parent index '$index_name'...\n";
         eval {
             $dbh->do("DROP INDEX IF EXISTS \"$index_name\"");
-            print "Index '$index_name' dropped successfully.\n";
+            print "Parent index '$index_name' dropped successfully.\n";
         };
         if ($@) {
-            print STDERR "Warning: Failed to drop index '$index_name': $@\n";
+            print STDERR "Warning: Failed to drop parent index '$index_name': $@\n";
+        }
+    }
+
+    # Drop remaining partition indexes (unattached ones not cascaded from parent)
+    for my $index_name (@partition_to_drop) {
+        print "Dropping partition index '$index_name'...\n";
+        eval {
+            $dbh->do("DROP INDEX IF EXISTS \"$index_name\"");
+            print "Partition index '$index_name' dropped successfully.\n";
+        };
+        if ($@) {
+            print STDERR "Warning: Failed to drop partition index '$index_name': $@\n";
         }
     }
 
@@ -544,10 +578,10 @@ sub drop_indexes {
 }
 
 sub get_existing_indexes {
-    my ($dbh) = @_;
-    
+    my ($dbh, $table_name) = @_;
+
     my $sth = $dbh->prepare(<<SQL);
-SELECT 
+SELECT
     i.indexname,
     i.indexdef,
     string_agg(a.attname, ', ') as columns
@@ -555,12 +589,12 @@ FROM pg_indexes i
 JOIN pg_class c ON c.relname = i.indexname
 JOIN pg_index idx ON idx.indexrelid = c.oid
 JOIN pg_attribute a ON a.attrelid = idx.indrelid AND a.attnum = ANY(idx.indkey)
-WHERE i.tablename = 'kafsss_data'
+WHERE i.tablename = ?
 GROUP BY i.indexname, i.indexdef
 ORDER BY i.indexname
 SQL
-    
-    $sth->execute();
+
+    $sth->execute($table_name);
     
     my %indexes = ();
     while (my ($name, $def, $cols) = $sth->fetchrow_array()) {
